@@ -16,6 +16,7 @@ export function formatSafeCustomer(profile) {
     profilePictureUrl: profile.profilePictureUrl || null,
     remainingTiffins: profile.remainingTiffins,
     serviceStatus: profile.serviceStatus,
+    isPaymentSuspended: profile.remainingTiffins <= 0,
     joinDate: profile.joinDate,
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
@@ -63,6 +64,7 @@ export async function getCustomerProfileByUserId(userId) {
     profilePictureUrl: profile.profilePictureUrl,
     remainingTiffins: profile.remainingTiffins,
     serviceStatus: profile.serviceStatus,
+    isPaymentSuspended: profile.remainingTiffins <= 0,
     joinDate: profile.joinDate,
     createdAt: profile.createdAt,
   };
