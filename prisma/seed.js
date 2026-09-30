@@ -43,7 +43,13 @@ async function main() {
   console.log("Creating development CUSTOMER user and profile...");
   const customerUser = await prisma.user.upsert({
     where: { loginIdentifier: "customer@swayamsiddha.local" },
-    update: {},
+    update: {
+      customerProfile: {
+        update: {
+          remainingTiffins: 55,
+        },
+      },
+    },
     create: {
       role: "CUSTOMER",
       loginIdentifier: "customer@swayamsiddha.local",
@@ -53,7 +59,7 @@ async function main() {
           name: "Dev Test Customer",
           phone: "+919876543210",
           profilePictureUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=256&q=80",
-          remainingTiffins: 54, // Started with 56, 2 consumed today for demonstration
+          remainingTiffins: 55, // 56 initial balance - 1 lunch token = 55 remaining tiffins
           serviceStatus: "ACTIVE",
           joinDate: new Date("2026-09-01"),
         },
@@ -215,6 +221,27 @@ async function main() {
     },
   });
 
+  // 12. Verification: Check that ledger total equals customerProfile.remainingTiffins
+  console.log("Validating ledger balance consistency...");
+  const ledgerTransactions = await prisma.tiffinTransaction.findMany({
+    where: { customerId: customerProfile.id },
+  });
+  const ledgerSum = ledgerTransactions.reduce((acc, tx) => acc + tx.quantity, 0);
+
+  const freshProfile = await prisma.customerProfile.findUnique({
+    where: { id: customerProfile.id },
+  });
+
+  console.log(`Calculated ledger total: ${ledgerSum}`);
+  console.log(`Customer profile remainingTiffins: ${freshProfile.remainingTiffins}`);
+
+  if (ledgerSum !== freshProfile.remainingTiffins) {
+    throw new Error(
+      `Ledger balance mismatch! Calculated ledger: ${ledgerSum}, customer remainingTiffins: ${freshProfile.remainingTiffins}`
+    );
+  }
+
+  console.log(`✅ Ledger verification passed: ${ledgerSum} == ${freshProfile.remainingTiffins} remaining tiffins.`);
   console.log("✅ Development seed finished successfully!");
 }
 
