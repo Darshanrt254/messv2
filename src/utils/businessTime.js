@@ -201,6 +201,11 @@ export function getISTDayTimestampRange(dateString) {
  */
 export function parseDateRange(fromStr, toStr) {
   const todayStr = getISTComponents(getNow()).dateString;
+
+  if (toStr && !fromStr) {
+    throw ApiError.badRequest("Missing 'from' date parameter when 'to' date is specified.");
+  }
+
   const from = fromStr || todayStr;
   const to = toStr || from;
 
@@ -228,3 +233,46 @@ export function parseDateRange(fromStr, toStr) {
     toTimestampExclusive,
   };
 }
+
+/**
+ * Returns an array of YYYY-MM-DD date strings inclusive from start to end.
+ * @param {string} fromStr
+ * @param {string} toStr
+ * @returns {string[]}
+ */
+export function getBusinessDatesList(fromStr, toStr) {
+  const dates = [];
+  let curr = parseBusinessDate(fromStr);
+  const end = parseBusinessDate(toStr);
+
+  while (curr.getTime() <= end.getTime()) {
+    dates.push(getISTComponents(curr).dateString);
+    curr = new Date(curr.getTime() + 24 * 60 * 60 * 1000);
+  }
+  return dates;
+}
+
+/**
+ * Formats a Date object or business date into YYYY-MM-DD in IST.
+ * @param {Date|string|null} date
+ * @returns {string}
+ */
+export function formatISTDate(date) {
+  if (!date) return "-";
+  if (typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
+  const { dateString } = getISTComponents(date);
+  return dateString;
+}
+
+/**
+ * Formats a timestamp into human-readable IST datetime string (YYYY-MM-DD HH:mm:ss IST).
+ * @param {Date|string|null} date
+ * @returns {string}
+ */
+export function formatISTDateTime(date) {
+  if (!date) return "-";
+  const { year, month, day, hours, minutes, seconds } = getISTComponents(date);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${year}-${pad(month)}-${pad(day)} ${pad(hours)}:${pad(minutes)}:${pad(seconds)} IST`;
+}
+

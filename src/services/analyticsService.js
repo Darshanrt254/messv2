@@ -716,7 +716,8 @@ export async function getTokenAnalytics({ from: fromStr, to: toStr } = {}) {
  * 12. Daily Operational Summary
  * Comprehensive daily snapshot of operations, attendance, tokens, and poll.
  */
-export async function getDailyOperationalSummary(dateStr) {
+export async function getDailyOperationalSummary(dateInput) {
+  const dateStr = typeof dateInput === "object" && dateInput !== null ? dateInput.date : dateInput;
   const todayStr = getISTComponents(getNow()).dateString;
   const effectiveStr = dateStr || todayStr;
 

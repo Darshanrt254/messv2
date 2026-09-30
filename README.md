@@ -148,6 +148,11 @@ The server will start listening at `http://localhost:5000`.
 | `GET` | `/api/owner/analytics/tokens` | Owner only | Authoritative token counts by meal, location, and date (`?from=&to=`) |
 | `GET` | `/api/owner/analytics/daily` | Owner only | Comprehensive operational snapshot for a single date (`?date=`) |
 
+### Owner Export Endpoints (`/api/owner/exports`)
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/owner/exports/xlsx` | Owner only | Generates & downloads 7-sheet operational XLSX report (`?from=&to=`) |
+
 ---
 
 ## 7. Request / Response Examples
@@ -659,12 +664,55 @@ Phase 5 atomic transaction (MealCounter allocation, MealToken creation, -1 ledge
 
 ---
 
-## 15. Features Deferred to Future Phases
+---
 
-The following capabilities are deliberately **NOT** implemented in Phase 8:
-- ❌ XLSX / Excel report export (Scheduled for Phase 9)
+## 15. Phase 9 Architecture: Owner Operational XLSX Export API
+
+### 1. Architectural Overview & Read-Only Guarantee
+- **Endpoint**: `GET /api/owner/exports/xlsx`
+- **Strict Read-Only Execution**: The export operation never modifies customer balances, never creates or alters `MealToken` records, never marks or overrides `Attendance`, never inserts `TiffinTransaction` records, and never modifies `Message` or `Poll` statuses.
+- **Authoritative Database Queries**: Directly queries PostgreSQL via Prisma utilizing bounded date ranges and relations with zero N+1 queries.
+- **Dependency**: Uses `exceljs` for deterministic, server-side streaming/buffering of XLSX workbooks.
+
+### 2. Authorization
+- Protected by `requireAuth` and `requireRole("OWNER")`.
+- Authenticated `CUSTOMER` users receive `403 Forbidden`.
+- Unauthenticated requests receive `401 Unauthorized`.
+- **Credential Hygiene**: Password hashes, session tokens, and security secrets are strictly excluded from all workbook sheets.
+
+### 3. Date Range & Timezone Semantics (Asia/Kolkata)
+- Query parameters: `from=YYYY-MM-DD`, `to=YYYY-MM-DD`.
+- Strict validation: malformed dates, impossible dates (e.g., `2026-02-31`), and inverted ranges (`from > to`) reject with `400 Bad Request`.
+- If both are omitted, defaults to the current business date in IST.
+- If only `from` is specified, exports that single date (`to = from`).
+- If `to` is specified without `from`, returns `400 Bad Request`.
+- Dates and timestamps are converted to IST day boundaries:
+  - Date fields (`Attendance.date`, `MealToken.date`, `Poll.date`): compared against midnight UTC `@db.Date`.
+  - Timestamp fields (`TiffinTransaction.createdAt`, `Message.createdAt`): filtered between `from` IST start-of-day and `to` IST next-day start.
+
+### 4. Workbook Structure (7 Worksheets)
+1. **Attendance**: Detailed presence/absence logs with customer name, phone, meal type, human-readable attendance status, location, source, and issued meal token.
+2. **Customers**: Complete customer roster with remaining tiffins, distinct service suspension status, payment suspension status, overall operational status, and account creation timestamp. (Excludes sensitive password hashes and authentication tokens).
+3. **Tiffin Transactions**: Immutable tiffin ledger including transaction ID, customer details, transaction type, absolute quantity, signed quantity, reference note, and IST timestamp.
+4. **Poll Results**: Actual lunch poll votes cast by customers (excluding weekends). No fabricated historical votes.
+5. **Messages**: Customer communication records with content, status (`UNREAD`, `READ`, `RESOLVED`), and read/resolved timestamps.
+6. **Meal Tokens**: Authoritative record of successfully generated meal tokens in standard format (`DD-MM-LU/DN-R/C-SSS`).
+7. **Daily Summary**: High-level daily operational summary for each calendar day in the range (lunch/dinner attendance, locations, meals consumed, tiffins added, tiffins consumed, net balance changes, poll votes, messages, and new customers), ending with a highlighted `TOTAL` summary row.
+   - *Sunday Rule*: Dinner presence, dinner absence, and dinner restaurant are strictly 0.
+   - *Saturday Rule*: Lunch poll votes are strictly 0.
+
+### 5. HTTP Response Headers
+- `Content-Type`: `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
+- `Content-Disposition`: `attachment; filename="swayamsiddha-report-${from}-to-${to}.xlsx"`
+
+---
+
+## 16. Features Deferred to Future Phases
+
+The following capabilities are deliberately **NOT** implemented in Phase 9:
 - ❌ Railway cloud deployment & production hosting
 - ❌ Frontend client integration (swayamsiddha-frontend)
+
 
 
 
