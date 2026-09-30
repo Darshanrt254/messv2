@@ -36,10 +36,22 @@ export async function getCustomerTodayMealState(userId, date = getNow()) {
       customerId: profile.id,
       date: businessDate,
     },
+    include: {
+      mealToken: true,
+    },
   });
 
   const lunchRecord = attendances.find((a) => a.mealType === "LUNCH");
   const dinnerRecord = attendances.find((a) => a.mealType === "DINNER");
+
+  const formatTokenInfo = (record) => {
+    if (!record || !record.mealToken) return null;
+    return {
+      tokenId: record.mealToken.id,
+      token: record.mealToken.token,
+      generatedAt: record.mealToken.createdAt,
+    };
+  };
 
   // Fetch poll state for customer
   const pollState = await getPollForCustomer(profile.id, date);
@@ -52,12 +64,14 @@ export async function getCustomerTodayMealState(userId, date = getNow()) {
       status: lunchRecord ? lunchRecord.status : "UNMARKED",
       location: lunchRecord ? lunchRecord.location : null,
       locked: !!(lunchRecord && lunchRecord.status !== "UNMARKED"),
+      mealToken: formatTokenInfo(lunchRecord),
     },
     dinner: {
       serviceAvailable: !isSunday(date),
       status: dinnerRecord ? dinnerRecord.status : "UNMARKED",
       location: dinnerRecord ? dinnerRecord.location : null,
       locked: !!(dinnerRecord && dinnerRecord.status !== "UNMARKED"),
+      mealToken: formatTokenInfo(dinnerRecord),
     },
     poll: pollState,
   };
@@ -218,6 +232,7 @@ export async function listAttendanceForOwner({ date, customerId, mealType, statu
     where,
     orderBy: [{ date: "desc" }, { createdAt: "desc" }],
     include: {
+      mealToken: true,
       customer: {
         select: {
           id: true,
@@ -249,10 +264,23 @@ export async function updateAttendanceByOwner(attendanceId, { status, location }
 
   const existing = await prisma.attendance.findUnique({
     where: { id: attendanceId },
+    include: { mealToken: true },
   });
 
   if (!existing) {
     throw ApiError.notFound(`Attendance record with ID '${attendanceId}' not found.`);
+  }
+
+  // If attendance already has a MealToken, reject edits that alter status or location
+  if (existing.mealToken) {
+    if (
+      (status !== undefined && status !== existing.status) ||
+      (location !== undefined && location !== existing.location)
+    ) {
+      throw ApiError.conflict(
+        `Cannot modify attendance: A meal token (${existing.mealToken.token}) has already been generated for this attendance record.`
+      );
+    }
   }
 
   const newStatus = status !== undefined ? status : existing.status;

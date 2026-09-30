@@ -7,6 +7,7 @@ import authRoutes from "./routes/authRoutes.js";
 import customerRoutes from "./routes/customerRoutes.js";
 import ownerCustomerRoutes from "./routes/ownerCustomerRoutes.js";
 import ownerAttendanceRoutes from "./routes/ownerAttendanceRoutes.js";
+import ownerMealTokenRoutes from "./routes/ownerMealTokenRoutes.js";
 import testRoutes from "./routes/testRoutes.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorMiddleware.js";
 
@@ -34,7 +35,7 @@ app.get("/api/health", (req, res) => {
   res.status(200).json({
     status: "ok",
     service: "swayamsiddha-backend",
-    phase: 4,
+    phase: 5,
     timestamp: new Date().toISOString(),
   });
 });
@@ -44,6 +45,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/customer", customerRoutes);
 app.use("/api/owner/customers", ownerCustomerRoutes);
 app.use("/api/owner/attendance", ownerAttendanceRoutes);
+app.use("/api/owner/meal-tokens", ownerMealTokenRoutes);
 app.use("/api/test", testRoutes);
 
 // Catch-all 404 handler

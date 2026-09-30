@@ -119,6 +119,7 @@ The server will start listening at `http://localhost:5000`.
 | `PATCH` | `/api/owner/customers/:customerId` | Owner only | Updates basic customer info (`name`, `phone`, `profilePictureUrl`) |
 | `GET` | `/api/owner/attendance` | Owner only | Operational attendance records with filters (`date`, `customerId`, `mealType`, `status`) |
 | `PATCH` | `/api/owner/attendance/:attendanceId` | Owner only | Manually overrides attendance with domain validation & audit log |
+| `POST` | `/api/owner/meal-tokens/:attendanceId` | Owner only | Generates meal token and executes exactly-once tiffin deduction |
 
 ---
 
@@ -290,3 +291,107 @@ npm test
 - **Test V**: Zero `MEAL_TOKEN` transactions created by Phase 4 operations.
 - **Test W**: Poll uniqueness $\rightarrow$ Repeated/concurrent poll retrieval creates exactly one poll record.
 - **Test X**: Customer isolation $\rightarrow$ Customer retrieves only their own meal and attendance state.
+
+### Phase 5: Meal Token & Tiffin Deduction Test Suite (`tests/mealToken.test.js`)
+- **Test A**: Lunch Restaurant token $\rightarrow$ Generates `DD-MM-LU-R-001` for `PRESENT` + `RESTAURANT`.
+- **Test B**: Lunch College token $\rightarrow$ Generates `DD-MM-LU-C-001` for `PRESENT` + `COLLEGE`.
+- **Test C**: Dinner Restaurant token $\rightarrow$ Generates `DD-MM-DN-R-001` for `PRESENT` + `RESTAURANT`.
+- **Test D**: Invalid `ABSENT` attendance $\rightarrow$ Rejected (400 Bad Request).
+- **Test E**: Invalid `UNMARKED` attendance $\rightarrow$ Rejected (400 Bad Request).
+- **Test F**: `PRESENT` with `null` location $\rightarrow$ Rejected (400 Bad Request).
+- **Test G**: Sunday dinner $\rightarrow$ Strictly rejected (400 Bad Request).
+- **Test H**: Zero balance customer $\rightarrow$ Rejected with 409 Conflict; no token, counter, or transaction created.
+- **Test I**: Balance deduction $\rightarrow$ Decrements customer `remainingTiffins` by exactly 1.
+- **Test J**: Ledger transaction $\rightarrow$ Creates exactly one `MEAL_TOKEN` transaction with `quantity: -1`.
+- **Test K**: Ledger consistency $\rightarrow$ $\sum \text{quantity} == \text{remainingTiffins}$ strictly holds.
+- **Test L**: Repeated same attendance $\rightarrow$ Returns identical token without duplicate deductions or counters.
+- **Test M**: Concurrent requests on same attendance $\rightarrow$ Exactly one token and one deduction created.
+- **Test N**: Two attendances with balance = 1 $\rightarrow$ Exactly one succeeds, one fails (409), balance reaches 0 (never negative).
+- **Test O**: Counter sequencing $\rightarrow$ Same date/meal/location yields sequential numbers (`001`, `002`, `003`).
+- **Test P**: Counter separation $\rightarrow$ Independent counters per `(date, mealType, location)` start at `001`.
+- **Test Q**: Counter rollback $\rightarrow$ Failed transaction rolls back counter, preserving sequential numbering.
+- **Test R**: Token uniqueness $\rightarrow$ Zero duplicate token values across the system.
+- **Test S**: CUSTOMER invoking owner token endpoint $\rightarrow$ 403 Forbidden.
+- **Test T**: Unauthenticated request $\rightarrow$ 401 Unauthorized.
+- **Test U**: OWNER invoking token endpoint $\rightarrow$ 200/201 Success.
+- **Test V**: Owner attendance edit after token $\rightarrow$ Altering status/location rejected with 409 Conflict.
+- **Test W**: Customer meal state retrieval $\rightarrow$ Exposes safe `mealToken` metadata (`token`, `tokenId`, `generatedAt`).
+- **Test X**: No automatic finalization $\rightarrow$ Clocks reaching 16:00 / 23:00 do not create tokens.
+- **Test Y**: No duplicate transactions $\rightarrow$ Repeated calls never produce duplicate `MEAL_TOKEN` rows.
+- **Test Z**: Token format validation $\rightarrow$ Strict regex `DD-MM-LU/DN-R/C-SSS`, never `01`/`02` for meal code.
+
+---
+
+## 11. Phase 5 Architecture: Meal Token & Exactly-Once Tiffin Deduction
+
+### 1. Token Format
+The human-readable meal token string follows the strict specification:
+```
+DD-MM-MEAL-LOCATION-SSS
+```
+Where:
+- `DD`: 2-digit calendar day in Asia/Kolkata (IST)
+- `MM`: 2-digit calendar month in Asia/Kolkata (IST)
+- `MEAL`:
+  - `LU` = `LUNCH`
+  - `DN` = `DINNER` *(Do NOT use `01`/`02`)*
+- `LOCATION`:
+  - `R` = `RESTAURANT`
+  - `C` = `COLLEGE`
+- `SSS`: 3-digit sequential serial number (`001`, `002`, `003`, ...)
+
+#### Examples:
+- `30-09-LU-R-001` (30 Sep Lunch Restaurant, 1st token)
+- `30-09-LU-C-001` (30 Sep Lunch College, 1st token)
+- `30-09-DN-R-001` (30 Sep Dinner Restaurant, 1st token)
+
+### 2. Component Mapping
+| Domain Enum | Code | Notes |
+| :--- | :--- | :--- |
+| `MealType.LUNCH` | `LU` | Valid for `RESTAURANT` & `COLLEGE` (weekday); `RESTAURANT` only (weekends) |
+| `MealType.DINNER` | `DN` | Valid for `RESTAURANT` only (Monday-Saturday); Sunday dinner prohibited |
+| `MealLocation.RESTAURANT` | `R` | Allowed for Lunch and Dinner |
+| `MealLocation.COLLEGE` | `C` | Allowed for Lunch only. Invalid for Dinner. |
+
+### 3. Counter Rules & Independence
+Counters are stored in the `MealCounter` table and scoped by the composite unique key:
+```prisma
+@@unique([date, mealType, location])
+```
+Because each combination is tracked independently:
+- `30-09-LU-R` starts at `001`
+- `30-09-LU-C` starts at `001`
+- `30-09-DN-R` starts at `001`
+
+### 4. Counter Concurrency & PostgreSQL Rollback
+- Counters are incremented within an atomic PostgreSQL transaction using `tx.mealCounter.upsert`.
+- If any subsequent step in the transaction fails (such as token constraint violation or insufficient balance), PostgreSQL rolls back the transaction. The counter update is reverted, ensuring no serial numbers are wasted or skipped on failure.
+
+### 5. Exactly-Once Tiffin Deduction Rule
+- Attendance marking, poll voting, and owner attendance edits **NEVER** deduct tiffins.
+- A tiffin is deducted **EXACTLY ONCE** if and only if a `MealToken` is successfully created.
+- Each successful token creation records a `TiffinTransaction` with `quantity = -1` and `type = "MEAL_TOKEN"`.
+- Ledger invariant:
+  $$\sum \text{TiffinTransaction.quantity} == \text{CustomerProfile.remainingTiffins}$$
+
+### 6. Atomic Conditional Balance Decrement
+- Balance pre-check requires `remainingTiffins > 0`. If `0`, rejects immediately with `409 Conflict`.
+- Inside the transaction, balance is decremented using an atomic conditional update:
+  ```javascript
+  await tx.customerProfile.updateMany({
+    where: { id: customerId, remainingTiffins: { gt: 0 } },
+    data: { remainingTiffins: { decrement: 1 } }
+  });
+  ```
+- If two requests race for a customer with `balance = 1`, exactly one will match `count = 1`. The second receives `count = 0` and rolls back with `409 Conflict`.
+- Balance can **never** become negative.
+
+### 7. Idempotency Guarantees
+- The `MealToken` table enforces `@@unique([attendanceId])`.
+- If an attendance already has an issued token, `generateMealToken` returns the existing token immediately with `isNew: false`.
+- No new counter is allocated, no duplicate `MealToken` is written, no duplicate ledger entry is logged, and no additional balance is deducted.
+
+### 8. Protected Attendance Records
+- If an attendance record has an associated `MealToken`, owner updates via `PATCH /api/owner/attendance/:id` that attempt to alter its `status` or `location` are rejected with `409 Conflict`.
+- Prevents invalidating meals that have already had tokens issued or tiffins deducted.
+
