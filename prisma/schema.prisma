@@ -1,0 +1,309 @@
+// Swayamsiddha Tiffin Management System - Prisma Schema
+// PostgreSQL Database Architecture
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================================================
+// ENUMS
+// ==================================================
+
+enum Role {
+  OWNER
+  CUSTOMER
+}
+
+enum ServiceStatus {
+  ACTIVE
+  SERVICE_SUSPENDED
+  PAYMENT_SUSPENDED
+}
+
+enum AttendanceStatus {
+  UNMARKED
+  PRESENT
+  ABSENT
+}
+
+enum MealType {
+  LUNCH
+  DINNER
+}
+
+enum MealLocation {
+  COLLEGE
+  RESTAURANT
+}
+
+enum AttendanceSource {
+  CUSTOMER
+  OWNER
+  AUTO
+  SUSPENSION
+  WEEKLY_RULE
+}
+
+enum PollStatus {
+  OPEN
+  CLOSED
+}
+
+enum TiffinTransactionType {
+  INITIAL_BALANCE
+  CASH_RECHARGE
+  MEAL_TOKEN
+  ADJUSTMENT
+}
+
+enum MessageStatus {
+  UNREAD
+  READ
+  RESOLVED
+}
+
+// ==================================================
+// 1. USER
+// ==================================================
+
+model User {
+  id              String   @id @default(uuid())
+  role            Role
+  loginIdentifier String   @unique
+  passwordHash    String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // 1-to-1 optional relationship with CustomerProfile (only for CUSTOMER role)
+  customerProfile CustomerProfile?
+
+  // Relations to track user actions / auditability
+  createdTransactions TiffinTransaction[] @relation("UserCreatedTransactions")
+  createdSuspensions  ServiceSuspension[] @relation("UserCreatedSuspensions")
+  auditLogs           AuditLog[]          @relation("UserAuditLogs")
+
+  @@map("users")
+}
+
+// ==================================================
+// 2. CUSTOMER PROFILE
+// ==================================================
+
+model CustomerProfile {
+  id                String        @id @default(uuid())
+  userId            String        @unique
+  user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name              String
+  phone             String        @unique
+  profilePictureUrl String?
+  remainingTiffins  Int           @default(56)
+  serviceStatus     ServiceStatus @default(ACTIVE)
+  joinDate          DateTime      @default(now())
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  // Core customer relations
+  attendances        Attendance[]
+  pollVotes          PollVote[]
+  tiffinTransactions TiffinTransaction[]
+  serviceSuspensions ServiceSuspension[]
+  messages           Message[]
+
+  @@map("customer_profiles")
+}
+
+// ==================================================
+// 3. ATTENDANCE
+// ==================================================
+
+model Attendance {
+  id         String           @id @default(uuid())
+  customerId String
+  customer   CustomerProfile  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  date       DateTime         @db.Date
+  mealType   MealType
+  status     AttendanceStatus @default(UNMARKED)
+  location   MealLocation?
+  source     AttendanceSource @default(CUSTOMER)
+  markedAt   DateTime?
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  // 1-to-1 relationship with MealToken (attendance can have at most one token)
+  mealToken MealToken?
+
+  // Traceability to ledger deductions
+  tiffinTransactions TiffinTransaction[]
+
+  // One attendance record per customer per date per meal type
+  @@unique([customerId, date, mealType])
+  @@index([customerId, date])
+  @@index([date, mealType])
+  @@index([date, mealType, location])
+  @@map("attendances")
+}
+
+// ==================================================
+// 4. POLL
+// ==================================================
+
+model Poll {
+  id        String     @id @default(uuid())
+  date      DateTime   @db.Date
+  mealType  MealType   @default(LUNCH)
+  opensAt   DateTime
+  closesAt  DateTime
+  status    PollStatus @default(OPEN)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  // Relationship to individual customer votes
+  votes PollVote[]
+
+  // Exactly one poll per date per meal type (Lunch location poll)
+  @@unique([date, mealType])
+  @@index([date, mealType])
+  @@map("polls")
+}
+
+// ==================================================
+// 5. POLL VOTE
+// ==================================================
+
+model PollVote {
+  id         String          @id @default(uuid())
+  pollId     String
+  poll       Poll            @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  customerId String
+  customer   CustomerProfile @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  option     MealLocation
+  votedAt    DateTime        @default(now())
+
+  // A customer may vote only once per poll
+  @@unique([pollId, customerId])
+  @@index([customerId])
+  @@map("poll_votes")
+}
+
+// ==================================================
+// 6. MEAL TOKEN
+// ==================================================
+
+model MealToken {
+  id           String       @id @default(uuid())
+  attendanceId String       @unique
+  attendance   Attendance   @relation(fields: [attendanceId], references: [id], onDelete: Cascade)
+  token        String       @unique
+  date         DateTime     @db.Date
+  mealType     MealType
+  location     MealLocation
+  serialNumber Int
+  createdAt    DateTime     @default(now())
+
+  @@index([date, mealType, location])
+  @@map("meal_tokens")
+}
+
+// ==================================================
+// 7. MEAL COUNTER
+// ==================================================
+
+model MealCounter {
+  id         String       @id @default(uuid())
+  date       DateTime     @db.Date
+  mealType   MealType
+  location   MealLocation
+  nextSerial Int          @default(1)
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  // Independent counter per date + mealType + location
+  @@unique([date, mealType, location])
+  @@map("meal_counters")
+}
+
+// ==================================================
+// 8. TIFFIN TRANSACTION (LEDGER)
+// ==================================================
+
+model TiffinTransaction {
+  id            String                @id @default(uuid())
+  customerId    String
+  customer      CustomerProfile       @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  quantity      Int
+  type          TiffinTransactionType
+  reason        String?
+  attendanceId  String?
+  attendance    Attendance?           @relation(fields: [attendanceId], references: [id], onDelete: SetNull)
+  createdBy     String?
+  createdByUser User?                 @relation("UserCreatedTransactions", fields: [createdBy], references: [id], onDelete: SetNull)
+  createdAt     DateTime              @default(now())
+
+  @@index([customerId, createdAt])
+  @@index([customerId, type])
+  @@index([attendanceId])
+  @@map("tiffin_transactions")
+}
+
+// ==================================================
+// 9. SERVICE SUSPENSION
+// ==================================================
+
+model ServiceSuspension {
+  id            String          @id @default(uuid())
+  customerId    String
+  customer      CustomerProfile @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  startDate     DateTime        @db.Date
+  endDate       DateTime        @db.Date
+  reason        String?
+  createdBy     String?
+  createdByUser User?           @relation("UserCreatedSuspensions", fields: [createdBy], references: [id], onDelete: SetNull)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([customerId, startDate, endDate])
+  @@map("service_suspensions")
+}
+
+// ==================================================
+// 10. MESSAGE
+// ==================================================
+
+model Message {
+  id         String          @id @default(uuid())
+  customerId String
+  customer   CustomerProfile @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  message    String          @db.Text
+  status     MessageStatus   @default(UNREAD)
+  createdAt  DateTime        @default(now())
+  readAt     DateTime?
+  resolvedAt DateTime?
+
+  @@index([customerId, createdAt])
+  @@index([status])
+  @@map("messages")
+}
+
+// ==================================================
+// 11. AUDIT LOG
+// ==================================================
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String?
+  actor      User?    @relation("UserAuditLogs", fields: [actorId], references: [id], onDelete: SetNull)
+  action     String
+  entityType String
+  entityId   String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorId, createdAt])
+  @@map("audit_logs")
+}
