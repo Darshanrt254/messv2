@@ -132,6 +132,22 @@ The server will start listening at `http://localhost:5000`.
 | `POST` | `/api/owner/automation/finalize-dinner` | Owner only | Manually triggers 11:00 PM IST Dinner finalization (testing/dev) |
 | `GET` | `/api/owner/automation/status` | Owner only | Inspects daily scheduler status and configured jobs |
 
+### Owner Analytics Endpoints (`/api/owner/analytics`)
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/owner/analytics/overview` | Owner only | High-level operational summary across subsystems (`?from=&to=`) |
+| `GET` | `/api/owner/analytics/attendance` | Owner only | Daily attendance breakdown (`present`, `absent`, `unmarked`) (`?from=&to=`) |
+| `GET` | `/api/owner/analytics/locations` | Owner only | Authoritative location distribution from attendance (`?from=&to=`) |
+| `GET` | `/api/owner/analytics/meals` | Owner only | Authoritative tokenized meal consumption (`?from=&to=`) |
+| `GET` | `/api/owner/analytics/tiffins` | Owner only | Authoritative tiffin ledger analytics (`?from=&to=`) |
+| `GET` | `/api/owner/analytics/balances` | Owner only | Customer balance distribution and low-balance thresholds |
+| `GET` | `/api/owner/analytics/customer-status` | Owner only | Snapshot of active, service-suspended, and payment-suspended customers |
+| `GET` | `/api/owner/analytics/suspensions` | Owner only | Service suspension counts, affected customers, and active state (`?from=&to=`) |
+| `GET` | `/api/owner/analytics/polls` | Owner only | Weekday lunch poll totals and voting distribution (`?from=&to=`) |
+| `GET` | `/api/owner/analytics/messages` | Owner only | Message status counts (`UNREAD`, `READ`, `RESOLVED`) (`?from=&to=`) |
+| `GET` | `/api/owner/analytics/tokens` | Owner only | Authoritative token counts by meal, location, and date (`?from=&to=`) |
+| `GET` | `/api/owner/analytics/daily` | Owner only | Comprehensive operational snapshot for a single date (`?date=`) |
+
 ---
 
 ## 7. Request / Response Examples
@@ -593,12 +609,62 @@ Phase 5 atomic transaction (MealCounter allocation, MealToken creation, -1 ledge
 
 ---
 
-## 14. Features Deferred to Future Phases
+---
 
-The following capabilities are deliberately **NOT** implemented in Phase 7:
-- ❌ Analytics and operational summary dashboards
-- ❌ XLSX / Excel report export
-- ❌ Railway cloud deployment & webhooks
-- ❌ Frontend client integration
+## 14. Phase 8 Architecture: Owner Analytics & Operational Summary APIs
+
+### 1. Architectural Principles
+- **Strict Read-Only Guarantee**: Analytics endpoints perform **zero** mutations. They never create tokens, never deduct tiffins, never modify attendance, never alter messages, and never alter customer balances or suspensions.
+- **Authoritative Data Sources**: All statistics are calculated directly from transactional tables in PostgreSQL:
+  - `Attendance`: Authoritative for physical presence/absence and meal locations.
+  - `MealToken`: Authoritative for consumed meals and issued meal tokens. (`PRESENT` attendance without a `MealToken` is never counted as a consumed tiffin).
+  - `TiffinTransaction`: Authoritative double-entry ledger for historical tiffin flow (`INITIAL_BALANCE`, `CASH_RECHARGE`, `MEAL_TOKEN`, `ADJUSTMENT`).
+  - `CustomerProfile`: Authoritative for current point-in-time balance snapshot (`remainingTiffins`).
+  - `ServiceSuspension`: Authoritative for suspension records and affected customer metrics.
+  - `Poll` & `PollVote`: Authoritative for lunch location voting.
+  - `Message`: Authoritative for communication status (`UNREAD`, `READ`, `RESOLVED`).
+
+### 2. Role-Based Access Control
+- All 12 analytics endpoints require `requireAuth` + `requireRole("OWNER")`.
+- Authenticated `CUSTOMER` users receive `403 Forbidden`.
+- Unauthenticated requests receive `401 Unauthorized`.
+
+### 3. Date & Timezone Semantics (Asia/Kolkata)
+- All date queries represent business calendar dates in **Asia/Kolkata (`UTC+5:30`)**.
+- Validated with strict `YYYY-MM-DD` calendar parsing; malformed dates, impossible dates (e.g. `2026-02-30`), and inverted ranges (`from > to`) return `400 Bad Request`.
+- **Default Range**: When `from` and `to` are omitted, both default to the current business date in IST (`getISTComponents(getNow()).dateString`).
+- **Timestamp Filtering**: For timestamped models (`TiffinTransaction.createdAt`, `Message.createdAt`), calendar ranges `[from, to]` are translated into IST day boundaries:
+  $$\text{fromTimestamp} = \text{IST midnight of } from, \quad \text{toTimestampExclusive} = \text{IST midnight of } (to + 1 \text{ day})$$
+
+### 4. Endpoints & Metrics Summary
+| Endpoint | Query Params | Key Metrics Returned |
+| :--- | :--- | :--- |
+| `GET /api/owner/analytics/overview` | `from`, `to` | High-level operational summary across customers, attendance, meals, locations, tiffins, polls, messages. |
+| `GET /api/owner/analytics/attendance` | `from`, `to` | Daily breakdown of lunch/dinner attendance (`present`, `absent`, `unmarked`) and summary totals. |
+| `GET /api/owner/analytics/locations` | `from`, `to` | Authoritative location breakdown (`RESTAURANT` vs `COLLEGE`) based exclusively on `Attendance.location`. |
+| `GET /api/owner/analytics/meals` | `from`, `to` | Consumed meals counted exclusively from issued `MealToken` records (lunch, dinner, total, daily breakdown). |
+| `GET /api/owner/analytics/tiffins` | `from`, `to` | Authoritative tiffin quantities by transaction type (`initialBalance`, `cashRecharge`, `mealConsumption`, `adjustments`), net change, and transaction counts. |
+| `GET /api/owner/analytics/balances` | *None* | Point-in-time balance distribution: `totalCustomers`, `totalRemainingTiffins`, `averageTiffins`, `lowBalance` ($\le 10$), `veryLowBalance` ($\le 5$), `paymentPending` ($= 0$). |
+| `GET /api/owner/analytics/customer-status`| `date` | Snapshot of customer states: `total`, `active`, `serviceSuspended` (evaluated on specified date), `paymentSuspended` (`remainingTiffins <= 0`). |
+| `GET /api/owner/analytics/suspensions` | `from`, `to` | Total suspension records, distinct customers affected, currently active suspensions, and completed suspensions. |
+| `GET /api/owner/analytics/polls` | `from`, `to` | Total weekday lunch polls, total votes cast, and choice breakdown (`COLLEGE` vs `RESTAURANT`). Saturdays and Sundays excluded. |
+| `GET /api/owner/analytics/messages` | `from`, `to` | Total customer queries received and breakdown by state: `unread`, `read`, `resolved`. |
+| `GET /api/owner/analytics/tokens` | `from`, `to` | Authoritative meal token counts by meal type (`LUNCH`, `DINNER`), location (`RESTAURANT`, `COLLEGE`), and daily breakdown. |
+| `GET /api/owner/analytics/daily` | `date` | Comprehensive operational snapshot for a specific day: lunch/dinner attendance, token counts, tiffins consumed, and poll availability (Sunday dinner unavailable: `available: false`; Saturday poll unavailable: `available: false`). |
+
+### 5. Query & Performance Strategy
+- **Zero N+1 Query Loops**: No per-customer database round trips in loops.
+- **Database-Level Aggregation**: Leverages Prisma `count`, `groupBy`, and `aggregate` (`_sum`) to push aggregation computations down to PostgreSQL.
+- **Bounded Scans**: All queries are strictly bounded by indexed business date ranges (`date >= fromDate AND date <= toDate`) or timestamp intervals.
+
+---
+
+## 15. Features Deferred to Future Phases
+
+The following capabilities are deliberately **NOT** implemented in Phase 8:
+- ❌ XLSX / Excel report export (Scheduled for Phase 9)
+- ❌ Railway cloud deployment & production hosting
+- ❌ Frontend client integration (swayamsiddha-frontend)
+
 
 

@@ -3,6 +3,8 @@
  * All business operations for Swayamsiddha operate strictly in Asia/Kolkata (IST: UTC+5:30).
  */
 
+import ApiError from "./apiError.js";
+
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000; // 5 hours 30 minutes in milliseconds
 
 let mockNow = null;
@@ -148,5 +150,81 @@ export function getLunchPollWindow(date = getNow()) {
     isOpen,
     isBeforeOpen,
     isAfterClose,
+  };
+}
+
+/**
+ * Validates that a string is a valid YYYY-MM-DD calendar date.
+ * @param {string} dateStr
+ * @returns {boolean}
+ */
+export function isValidDateString(dateStr) {
+  if (!dateStr || typeof dateStr !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    return false;
+  }
+  const [year, month, day] = dateStr.split("-").map(Number);
+  const d = new Date(Date.UTC(year, month - 1, day));
+  return (
+    d.getUTCFullYear() === year &&
+    d.getUTCMonth() === month - 1 &&
+    d.getUTCDate() === day
+  );
+}
+
+/**
+ * Converts a business date string (YYYY-MM-DD) to its IST day boundaries in UTC timestamps.
+ * 00:00:00 IST = UTC - 5:30
+ * @param {string} dateString
+ * @returns {{ start: Date, endExclusive: Date }}
+ */
+export function getISTDayTimestampRange(dateString) {
+  const [year, month, day] = dateString.split("-").map(Number);
+  const start = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0) - IST_OFFSET_MS);
+  const endExclusive = new Date(Date.UTC(year, month - 1, day + 1, 0, 0, 0, 0) - IST_OFFSET_MS);
+  return { start, endExclusive };
+}
+
+/**
+ * Validates and normalizes date range parameters (from, to).
+ * If omitted, defaults both to today's business date.
+ *
+ * @param {string} [fromStr]
+ * @param {string} [toStr]
+ * @returns {{
+ *   from: string,
+ *   to: string,
+ *   fromDate: Date,
+ *   toDate: Date,
+ *   fromTimestamp: Date,
+ *   toTimestampExclusive: Date
+ * }}
+ */
+export function parseDateRange(fromStr, toStr) {
+  const todayStr = getISTComponents(getNow()).dateString;
+  const from = fromStr || todayStr;
+  const to = toStr || from;
+
+  if (!isValidDateString(from)) {
+    throw ApiError.badRequest(`Invalid 'from' date format: '${fromStr}'. Expected YYYY-MM-DD.`);
+  }
+  if (!isValidDateString(to)) {
+    throw ApiError.badRequest(`Invalid 'to' date format: '${toStr}'. Expected YYYY-MM-DD.`);
+  }
+  if (from > to) {
+    throw ApiError.badRequest(`Invalid date range: 'from' date (${from}) must be on or before 'to' date (${to}).`);
+  }
+
+  const fromDate = parseBusinessDate(from);
+  const toDate = parseBusinessDate(to);
+  const { start: fromTimestamp } = getISTDayTimestampRange(from);
+  const { endExclusive: toTimestampExclusive } = getISTDayTimestampRange(to);
+
+  return {
+    from,
+    to,
+    fromDate,
+    toDate,
+    fromTimestamp,
+    toTimestampExclusive,
   };
 }
