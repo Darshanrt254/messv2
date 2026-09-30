@@ -14,6 +14,19 @@ export async function getTodayMealState(req, res, next) {
 }
 
 /**
+ * Handles GET /api/customer/attendance/history
+ * Retrieves customer attendance history for an inclusive date range [from, to].
+ */
+export async function getAttendanceHistory(req, res, next) {
+  try {
+    const history = await attendanceService.getCustomerAttendanceHistory(req.user.id, req.query);
+    return res.status(200).json(history);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
  * Handles POST /api/customer/attendance
  * Confirms customer attendance for lunch or dinner.
  */

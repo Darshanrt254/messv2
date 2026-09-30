@@ -8,6 +8,8 @@ import {
   isWeekday,
   isSaturday,
   isSunday,
+  parseDateRange,
+  getBusinessDatesList,
 } from "../utils/businessTime.js";
 import { getPollForCustomer } from "./pollService.js";
 import { getCustomerServiceStatus } from "./customerEligibilityService.js";
@@ -381,3 +383,98 @@ export async function updateAttendanceByOwner(attendanceId, { status, location }
 
   return updated;
 }
+
+/**
+ * Retrieves historical attendance records for the authenticated customer
+ * across an inclusive business-date range [from, to].
+ *
+ * @param {string} userId - Authenticated customer's User ID
+ * @param {object} params
+ * @param {string} [params.from] - YYYY-MM-DD
+ * @param {string} [params.to] - YYYY-MM-DD
+ */
+export async function getCustomerAttendanceHistory(userId, { from: fromStr, to: toStr } = {}) {
+  if (!userId) {
+    throw ApiError.unauthorized("Authentication required.");
+  }
+
+  const profile = await prisma.customerProfile.findUnique({
+    where: { userId },
+  });
+
+  if (!profile) {
+    throw ApiError.notFound("Customer profile not found.");
+  }
+
+  const range = parseDateRange(fromStr, toStr);
+
+  const attendances = await prisma.attendance.findMany({
+    where: {
+      customerId: profile.id,
+      date: {
+        gte: range.fromDate,
+        lte: range.toDate,
+      },
+    },
+    include: {
+      mealToken: {
+        select: {
+          id: true,
+          token: true,
+          createdAt: true,
+        },
+      },
+    },
+    orderBy: { date: "asc" },
+  });
+
+  const datesList = getBusinessDatesList(range.from, range.to);
+
+  const days = datesList.map((dateStr) => {
+    const bDate = parseBusinessDate(dateStr);
+    const ist = getISTComponents(bDate);
+    const isSun = isSunday(bDate);
+
+    const dayAtts = attendances.filter(
+      (a) => new Date(a.date).toISOString().slice(0, 10) === new Date(bDate).toISOString().slice(0, 10)
+    );
+
+    const lunchRecord = dayAtts.find((a) => a.mealType === "LUNCH");
+    const dinnerRecord = dayAtts.find((a) => a.mealType === "DINNER");
+
+    return {
+      date: dateStr,
+      dayOfWeek: ist.dayName,
+      lunch: {
+        status: lunchRecord ? lunchRecord.status : "UNMARKED",
+        location: lunchRecord && lunchRecord.status === "PRESENT" ? lunchRecord.location : null,
+        mealToken: lunchRecord?.mealToken
+          ? {
+              tokenId: lunchRecord.mealToken.id,
+              token: lunchRecord.mealToken.token,
+            }
+          : null,
+      },
+      dinner: {
+        serviceAvailable: !isSun,
+        status: isSun ? null : (dinnerRecord ? dinnerRecord.status : "UNMARKED"),
+        location: !isSun && dinnerRecord && dinnerRecord.status === "PRESENT" ? dinnerRecord.location : null,
+        mealToken: !isSun && dinnerRecord?.mealToken
+          ? {
+              tokenId: dinnerRecord.mealToken.id,
+              token: dinnerRecord.mealToken.token,
+            }
+          : null,
+      },
+    };
+  });
+
+  return {
+    dateRange: {
+      from: range.from,
+      to: range.to,
+    },
+    days,
+  };
+}
+

@@ -16,6 +16,7 @@ router.get("/me", customerController.getMe);
 
 // Customer daily meal & attendance endpoints
 router.get("/meals/today", attendanceController.getTodayMealState);
+router.get("/attendance/history", attendanceController.getAttendanceHistory);
 router.post("/attendance", attendanceController.markAttendance);
 
 // Customer lunch poll endpoints
