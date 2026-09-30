@@ -4,6 +4,8 @@ import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import env from "./config/env.js";
 import authRoutes from "./routes/authRoutes.js";
+import customerRoutes from "./routes/customerRoutes.js";
+import ownerCustomerRoutes from "./routes/ownerCustomerRoutes.js";
 import testRoutes from "./routes/testRoutes.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorMiddleware.js";
 
@@ -31,13 +33,15 @@ app.get("/api/health", (req, res) => {
   res.status(200).json({
     status: "ok",
     service: "swayamsiddha-backend",
-    phase: 2,
+    phase: 3,
     timestamp: new Date().toISOString(),
   });
 });
 
 // Mount modular API routers
 app.use("/api/auth", authRoutes);
+app.use("/api/customer", customerRoutes);
+app.use("/api/owner/customers", ownerCustomerRoutes);
 app.use("/api/test", testRoutes);
 
 // Catch-all 404 handler

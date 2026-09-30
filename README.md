@@ -90,10 +90,9 @@ The server will start listening at `http://localhost:5000`.
 
 ---
 
-## 6. Authentication Endpoints
+## 6. API Endpoints
 
-All authentication endpoints are prefixed with `/api/auth`:
-
+### Authentication Endpoints (`/api/auth`)
 | Method | Endpoint | Access | Description |
 | :--- | :--- | :--- | :--- |
 | `POST` | `/api/auth/login` | Public | Authenticates credentials and sets session cookie |
@@ -101,6 +100,19 @@ All authentication endpoints are prefixed with `/api/auth`:
 | `GET` | `/api/auth/me` | Authenticated | Returns current authenticated user profile |
 | `GET` | `/api/test/owner` | Owner only | Temporary development route for verifying role enforcement |
 | `GET` | `/api/test/customer`| Customer only| Temporary development route for verifying role enforcement |
+
+### Customer Profile Endpoints (`/api/customer`)
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/customer/me` | Customer only | Returns authenticated customer's own profile (`req.user.id`) |
+
+### Owner Customer Management Endpoints (`/api/owner/customers`)
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/owner/customers` | Owner only | Paginated list of customers (`?page=1&limit=20&search=`) |
+| `GET` | `/api/owner/customers/:customerId` | Owner only | Detailed safe profile of a specific customer |
+| `POST` | `/api/owner/customers` | Owner only | Transactionally creates User, CustomerProfile, and initial ledger |
+| `PATCH` | `/api/owner/customers/:customerId` | Owner only | Updates basic customer info (`name`, `phone`, `profilePictureUrl`) |
 
 ---
 
@@ -222,7 +234,7 @@ Automated tests verify all authentication flows and role enforcement scenarios w
 npm test
 ```
 
-### Verified Test Suite:
+### Phase 2: Authentication Test Suite (`tests/auth.test.js`)
 - **Test A**: `POST /api/auth/login` (OWNER) $\rightarrow$ Returns 200, sets HTTP-only cookie, returns OWNER.
 - **Test B**: `POST /api/auth/login` (CUSTOMER) $\rightarrow$ Returns 200, sets cookie, returns CUSTOMER profile with remaining tiffins.
 - **Test C**: `POST /api/auth/login` (Invalid credentials) $\rightarrow$ Returns 401 with generic error, no cookie set.
@@ -230,3 +242,19 @@ npm test
 - **Test E**: `GET /api/auth/me` (Unauthenticated) $\rightarrow$ Returns 401 Unauthorized.
 - **Test F**: `POST /api/auth/logout` $\rightarrow$ Returns 200, clears cookie, invalidates session (subsequent `/me` returns 401).
 - **Test G**: Role protection on `/api/test/owner` $\rightarrow$ Allows OWNER (200), forbids CUSTOMER (403), rejects unauthenticated (401).
+
+### Phase 3: Customer Management Test Suite (`tests/customer.test.js`)
+- **Test A**: `GET /api/customer/me` $\rightarrow$ Returns 200 with authenticated customer's own safe profile.
+- **Test B**: `GET /api/owner/customers` $\rightarrow$ Returns 200 with paginated customer list.
+- **Test C**: `GET /api/owner/customers/:customerId` $\rightarrow$ Returns 200 with customer detail.
+- **Test D**: CUSTOMER accessing `GET /api/owner/customers` $\rightarrow$ Returns 403 Forbidden.
+- **Test E**: CUSTOMER accessing `GET /api/owner/customers/:customerId` $\rightarrow$ Returns 403 Forbidden.
+- **Test F**: CUSTOMER accessing `POST /api/owner/customers` $\rightarrow$ Returns 403 Forbidden.
+- **Test G**: OWNER creating customer `POST /api/owner/customers` $\rightarrow$ Transactionally creates User, Profile, INITIAL_BALANCE transaction, AuditLog and returns 201.
+- **Test H**: Duplicate `loginIdentifier` $\rightarrow$ Returns 409 Conflict.
+- **Test I**: Duplicate `phone` $\rightarrow$ Returns 409 Conflict.
+- **Test J**: Invalid initial balance (negative) $\rightarrow$ Returns 400 Bad Request.
+- **Test K**: OWNER updating customer profile `PATCH /api/owner/customers/:customerId` $\rightarrow$ Returns 200 with updated fields; ignores restricted balance/status fields.
+- **Test L**: CUSTOMER attempting `PATCH /api/owner/customers/:customerId` $\rightarrow$ Returns 403 Forbidden.
+- **Test M**: OWNER requesting non-existent customer `GET /api/owner/customers/:id` $\rightarrow$ Returns 404 Not Found.
+- **Test N**: Ledger consistency $\rightarrow$ Newly created customer ledger sum strictly equals `remainingTiffins`.
