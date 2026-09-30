@@ -8,6 +8,7 @@ import {
   isSaturday,
   isSunday,
 } from "../utils/businessTime.js";
+import { getCustomerServiceStatus } from "./customerEligibilityService.js";
 
 /**
  * Deterministically retrieves or creates today's Lunch Poll for Monday-Friday.
@@ -70,6 +71,35 @@ export async function getPollForCustomer(customerId, date = getNow()) {
   const businessDate = getBusinessDate(date);
   const poll = await getOrCreateTodayLunchPoll(date);
   const pollWindow = getLunchPollWindow(date);
+
+  // Check customer service & payment suspension status
+  const eligibility = await getCustomerServiceStatus(customerId, date);
+  if (eligibility.isServiceSuspended) {
+    return {
+      pollExists: true,
+      eligible: false,
+      status: pollWindow.isOpen ? "OPEN" : "CLOSED",
+      opensAt: poll.opensAt,
+      closesAt: poll.closesAt,
+      options: ["COLLEGE", "RESTAURANT"],
+      existingVote: null,
+      locked: true,
+      reason: "SERVICE_SUSPENDED",
+    };
+  }
+  if (eligibility.isPaymentSuspended) {
+    return {
+      pollExists: true,
+      eligible: false,
+      status: pollWindow.isOpen ? "OPEN" : "CLOSED",
+      opensAt: poll.opensAt,
+      closesAt: poll.closesAt,
+      options: ["COLLEGE", "RESTAURANT"],
+      existingVote: null,
+      locked: true,
+      reason: "PAYMENT_SUSPENDED",
+    };
+  }
 
   // Check customer's current lunch attendance
   const lunchAttendance = await prisma.attendance.findUnique({
@@ -146,6 +176,15 @@ export async function voteInPoll({ customerId, location, date = getNow() }) {
 
   if (!isWeekday(date)) {
     throw ApiError.badRequest("Lunch poll is available only Monday through Friday.");
+  }
+
+  // Suspension & payment eligibility checks
+  const eligibility = await getCustomerServiceStatus(customerId, date);
+  if (eligibility.isServiceSuspended) {
+    throw ApiError.badRequest("Cannot vote in poll: Service is suspended for today.");
+  }
+  if (eligibility.isPaymentSuspended) {
+    throw ApiError.conflict("Cannot vote in poll: Customer account is payment-suspended due to zero tiffin balance.");
   }
 
   const pollWindow = getLunchPollWindow(date);

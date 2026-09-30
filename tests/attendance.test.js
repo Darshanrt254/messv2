@@ -103,6 +103,11 @@ describe("Phase 4: Attendance & Lunch Poll Business Logic Tests", () => {
       return null;
     };
 
+    prisma.serviceSuspension = {
+      findFirst: async () => null,
+      findMany: async () => [],
+    };
+
     prisma.session.create = async ({ data }) => {
       const session = {
         id: `sess-${Date.now()}-${Math.random()}`,

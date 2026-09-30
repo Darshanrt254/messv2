@@ -10,6 +10,7 @@ import {
   isSunday,
 } from "../utils/businessTime.js";
 import { getPollForCustomer } from "./pollService.js";
+import { getCustomerServiceStatus } from "./customerEligibilityService.js";
 
 /**
  * Retrieves today's complete meal and attendance state for the authenticated customer.
@@ -29,6 +30,11 @@ export async function getCustomerTodayMealState(userId, date = getNow()) {
 
   const businessDate = getBusinessDate(date);
   const ist = getISTComponents(date);
+
+  // Check customer service & payment suspension status
+  const eligibility = await getCustomerServiceStatus(profile.id, date);
+  const isSuspended = eligibility.isServiceSuspended;
+  const isPaymentBlocked = eligibility.isPaymentSuspended;
 
   // Fetch today's attendance records for customer
   const attendances = await prisma.attendance.findMany({
@@ -56,21 +62,32 @@ export async function getCustomerTodayMealState(userId, date = getNow()) {
   // Fetch poll state for customer
   const pollState = await getPollForCustomer(profile.id, date);
 
+  const lunchStatus = isSuspended
+    ? (lunchRecord ? lunchRecord.status : "ABSENT")
+    : (lunchRecord ? lunchRecord.status : "UNMARKED");
+  const dinnerStatus = isSuspended
+    ? (dinnerRecord ? dinnerRecord.status : "ABSENT")
+    : (dinnerRecord ? dinnerRecord.status : "UNMARKED");
+
   return {
     businessDate: ist.dateString,
     dayOfWeek: ist.dayName,
+    serviceStatus: eligibility.serviceStatus,
+    isServiceSuspended: isSuspended,
+    isPaymentSuspended: isPaymentBlocked,
+    remainingTiffins: profile.remainingTiffins,
     lunch: {
-      serviceAvailable: true,
-      status: lunchRecord ? lunchRecord.status : "UNMARKED",
-      location: lunchRecord ? lunchRecord.location : null,
-      locked: !!(lunchRecord && lunchRecord.status !== "UNMARKED"),
+      serviceAvailable: !isSuspended,
+      status: lunchStatus,
+      location: isSuspended ? null : (lunchRecord ? lunchRecord.location : null),
+      locked: isSuspended || isPaymentBlocked || !!(lunchRecord && lunchRecord.status !== "UNMARKED"),
       mealToken: formatTokenInfo(lunchRecord),
     },
     dinner: {
-      serviceAvailable: !isSunday(date),
-      status: dinnerRecord ? dinnerRecord.status : "UNMARKED",
-      location: dinnerRecord ? dinnerRecord.location : null,
-      locked: !!(dinnerRecord && dinnerRecord.status !== "UNMARKED"),
+      serviceAvailable: !isSunday(date) && !isSuspended,
+      status: dinnerStatus,
+      location: isSuspended ? null : (dinnerRecord ? dinnerRecord.location : null),
+      locked: isSuspended || isPaymentBlocked || !!(dinnerRecord && dinnerRecord.status !== "UNMARKED"),
       mealToken: formatTokenInfo(dinnerRecord),
     },
     poll: pollState,
@@ -100,6 +117,15 @@ export async function markCustomerAttendance(userId, { mealType, status }, date 
 
   if (!profile) {
     throw ApiError.notFound("Customer profile not found.");
+  }
+
+  // Suspension & payment eligibility checks
+  const eligibility = await getCustomerServiceStatus(profile.id, date);
+  if (eligibility.isServiceSuspended) {
+    throw ApiError.badRequest("Attendance cannot be marked: Service is suspended for this date.");
+  }
+  if (eligibility.isPaymentSuspended) {
+    throw ApiError.conflict("Attendance cannot be marked: Customer account is payment-suspended due to zero tiffin balance.");
   }
 
   const businessDate = getBusinessDate(date);

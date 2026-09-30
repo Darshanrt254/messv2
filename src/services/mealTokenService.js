@@ -5,6 +5,7 @@ import {
   isSaturday,
   isSunday,
 } from "../utils/businessTime.js";
+import { getCustomerServiceStatus } from "./customerEligibilityService.js";
 
 /**
  * Formats the human-readable meal token string:
@@ -34,7 +35,7 @@ export function formatTokenString({ date, mealType, location, serialNumber }) {
  * Invariants:
  * 1. A tiffin is deducted EXACTLY ONCE if and only if a MealToken is successfully created.
  * 2. If a MealToken already exists for this attendance, returns the existing token (Idempotent).
- * 3. Remaining tiffins must be > 0.
+ * 3. Remaining tiffins must be > 0 and customer must not be service-suspended.
  * 4. All steps (counter allocation, token creation, ledger entry, balance decrement, audit log) are atomic.
  */
 export async function generateMealToken(arg, maybeActorId = null) {
@@ -106,8 +107,13 @@ export async function generateMealToken(arg, maybeActorId = null) {
     }
   }
 
-  // 6. Balance Pre-check
-  if (attendance.customer.remainingTiffins <= 0) {
+  // 6. Service & Payment Suspension Check
+  const eligibility = await getCustomerServiceStatus(attendance.customerId, attendance.date);
+  if (eligibility.isServiceSuspended) {
+    throw ApiError.badRequest("Cannot generate meal token: Customer service is suspended for the attendance date.");
+  }
+
+  if (eligibility.isPaymentSuspended || attendance.customer.remainingTiffins <= 0) {
     throw ApiError.conflict("Insufficient tiffin balance. Customer has zero remaining tiffins.");
   }
 

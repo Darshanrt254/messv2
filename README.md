@@ -106,9 +106,11 @@ The server will start listening at `http://localhost:5000`.
 | :--- | :--- | :--- | :--- |
 | `GET` | `/api/customer/me` | Customer only | Returns authenticated customer's own profile (`req.user.id`) |
 | `GET` | `/api/customer/meals/today` | Customer only | Returns today's meal, attendance, and poll status in IST |
-| `POST` | `/api/customer/attendance` | Customer only | Marks attendance (`PRESENT`/`ABSENT`). Enforces immutability. |
+| `POST` | `/api/customer/attendance` | Customer only | Marks attendance (`PRESENT`/`ABSENT`). Enforces immutability & suspension checks. |
 | `GET` | `/api/customer/poll/today` | Customer only | Returns today's lunch location poll status and eligibility |
 | `POST` | `/api/customer/poll/vote` | Customer only | Casts single immutable vote (`COLLEGE`/`RESTAURANT`) |
+| `POST` | `/api/customer/messages` | Customer only | Sends query/complaint/request message to owner |
+| `GET` | `/api/customer/messages` | Customer only | Returns authenticated customer's own message history |
 
 ### Owner Management Endpoints (`/api/owner`)
 | Method | Endpoint | Access | Description |
@@ -117,9 +119,15 @@ The server will start listening at `http://localhost:5000`.
 | `GET` | `/api/owner/customers/:customerId` | Owner only | Detailed safe profile of a specific customer |
 | `POST` | `/api/owner/customers` | Owner only | Transactionally creates User, CustomerProfile, and initial ledger |
 | `PATCH` | `/api/owner/customers/:customerId` | Owner only | Updates basic customer info (`name`, `phone`, `profilePictureUrl`) |
+| `POST` | `/api/owner/customers/:customerId/suspension` | Owner only | Suspends customer service for inclusive date range |
+| `GET` | `/api/owner/customers/:customerId/suspension` | Owner only | Retrieves customer's service suspension history |
+| `PATCH` | `/api/owner/customers/:customerId/suspension/:suspensionId/unsuspend` | Owner only | Ends active service suspension early |
+| `POST` | `/api/owner/customers/:customerId/recharge` | Owner only | Executes atomic cash recharge for tiffin balance |
 | `GET` | `/api/owner/attendance` | Owner only | Operational attendance records with filters (`date`, `customerId`, `mealType`, `status`) |
 | `PATCH` | `/api/owner/attendance/:attendanceId` | Owner only | Manually overrides attendance with domain validation & audit log |
 | `POST` | `/api/owner/meal-tokens/:attendanceId` | Owner only | Generates meal token and executes exactly-once tiffin deduction |
+| `GET` | `/api/owner/messages` | Owner only | Lists customer messages with filtering options |
+| `PATCH` | `/api/owner/messages/:messageId` | Owner only | Updates message status (`READ` or `RESOLVED`) |
 
 ---
 
@@ -320,6 +328,44 @@ npm test
 - **Test Y**: No duplicate transactions $\rightarrow$ Repeated calls never produce duplicate `MEAL_TOKEN` rows.
 - **Test Z**: Token format validation $\rightarrow$ Strict regex `DD-MM-LU/DN-R/C-SSS`, never `01`/`02` for meal code.
 
+### Phase 6: Service & Payment Suspension Test Suite (`tests/suspension.test.js`)
+- **Test 1**: Owner can suspend customer for inclusive date range.
+- **Test 2**: Customer cannot create suspension (403 Forbidden).
+- **Test 3**: Active suspension blocks customer attendance marking (400 Bad Request).
+- **Test 4**: Active suspension sets lunch poll eligibility to false with reason `SERVICE_SUSPENDED`.
+- **Test 5**: Active suspension blocks voting in lunch poll (400 Bad Request).
+- **Test 6**: Active suspension blocks token generation (400 Bad Request).
+- **Test 7**: Suspension does not deduct tiffins and does not create meal token.
+- **Test 8**: Suspension action creates `OWNER_SERVICE_SUSPENDED` audit log.
+- **Test 9**: Owner can list customer suspensions.
+- **Test 10**: Owner can unsuspend customer early (truncating endDate or removing future suspension) and creates `OWNER_SERVICE_UNSUSPENDED` audit log.
+- **Test 11**: After unsuspension, customer can mark attendance normally for future dates.
+- **Test 12**: Customer with balance 0 is payment suspended; can login and view profile, but blocked from attendance and poll (409 Conflict).
+
+### Phase 6: Owner Cash Recharge & Integration Test Suite (`tests/recharge.test.js`)
+- **Test 1**: Customer cannot invoke owner recharge endpoint (403 Forbidden).
+- **Test 2**: Non-positive or non-integer recharge amount is rejected (400 Bad Request).
+- **Test 3**: Full Integration Sequence:
+  - Initial balance 1 $\rightarrow$ Meal token generation succeeds $\rightarrow$ Balance becomes 0.
+  - Exactly one `-1` `MEAL_TOKEN` transaction logged.
+  - Customer enters `PAYMENT_SUSPENDED` $\rightarrow$ Further attendance marking blocked.
+  - Owner executes `+30` cash recharge $\rightarrow$ Balance becomes 30.
+  - Exactly one `+30` `CASH_RECHARGE` ledger transaction logged.
+  - Ledger sum strictly equals `remainingTiffins`.
+  - Payment suspension automatically clears $\rightarrow$ Customer can mark attendance normally again.
+  - Audit log `OWNER_CASH_RECHARGE` verified.
+
+### Phase 6: Customer & Owner Message Workflow Test Suite (`tests/messages.test.js`)
+- **Test 1**: Customer can send a message/query to owner (`POST /api/customer/messages`).
+- **Test 2**: Empty message or invalid payload is rejected (400 Bad Request).
+- **Test 3**: Customer can retrieve their own messages (`GET /api/customer/messages`).
+- **Test 4**: Owner can list all customer messages with customer profile details (`GET /api/owner/messages`).
+- **Test 5**: Customer cannot access owner message list (403 Forbidden).
+- **Test 6**: Owner marks message status as `READ` (`PATCH /api/owner/messages/:messageId`) with `readAt` timestamp.
+- **Test 7**: Customer cannot resolve or update message (403 Forbidden).
+- **Test 8**: Owner resolves message and sets `resolvedAt` timestamp.
+- **Test 9**: Attempting to modify an already `RESOLVED` message is rejected (400 Bad Request).
+
 ---
 
 ## 11. Phase 5 Architecture: Meal Token & Exactly-Once Tiffin Deduction
@@ -394,4 +440,71 @@ Because each combination is tracked independently:
 ### 8. Protected Attendance Records
 - If an attendance record has an associated `MealToken`, owner updates via `PATCH /api/owner/attendance/:id` that attempt to alter its `status` or `location` are rejected with `409 Conflict`.
 - Prevents invalidating meals that have already had tokens issued or tiffins deducted.
+
+---
+
+## 12. Phase 6 Architecture: Suspensions, Recharge & Messages
+
+### 1. Centralized Eligibility Architecture (`customerEligibilityService.js`)
+Service and payment statuses are evaluated cleanly and deterministically:
+```javascript
+getCustomerServiceStatus(customerId, date)
+```
+- **Service Suspension**: Checks `ServiceSuspension` table for any active record where `startDate <= requestedDate <= endDate`.
+- **Payment Suspension**: Derived dynamically from `remainingTiffins <= 0`. Never uses redundant boolean flags that could drift from ledger reality.
+- **Combined State**: Both states are independent and neither destroys the other:
+  - If service is suspended and balance == 0: `serviceStatus = "SERVICE_SUSPENDED"` (primary operational status), with both `isServiceSuspended = true` and `isPaymentSuspended = true` explicitly flagged.
+
+### 2. Service Suspension Behavior
+- Configured by OWNER for an inclusive date range (`startDate` to `endDate`) with optional reason.
+- **Enforcement**:
+  - `POST /api/customer/attendance`: Rejected with 400 Bad Request if service is suspended for that date.
+  - `POST /api/customer/poll/vote`: Rejected with 400 Bad Request.
+  - `GET /api/customer/poll/today`: Marks `eligible = false` with `reason: "SERVICE_SUSPENDED"`.
+  - `POST /api/owner/meal-tokens/:attendanceId`: Strictly rejected; no meal token, no counter increment, no balance deduction.
+- **Zero Tiffin Consumption**: Suspensions **never** consume tiffins or create transactions.
+- **Early Unsuspension**: OWNER can terminate a suspension early via `PATCH .../unsuspend`.
+  - If the suspension starts in the future, it is removed.
+  - If currently active, `endDate` is truncated to yesterday, leaving future dates open.
+  - Past attendance records marked `ABSENT` remain unchanged.
+- **Auditing**: Every suspension and unsuspension action creates an `AuditLog` entry (`OWNER_SERVICE_SUSPENDED`, `OWNER_SERVICE_UNSUSPENDED`).
+
+### 3. Payment Suspension Behavior
+- Automatically active whenever `CustomerProfile.remainingTiffins <= 0`.
+- **Allowed Operations**:
+  - Customer can login, fetch profile (`GET /api/customer/me`), view remaining tiffins (0), and send messages/queries to the owner.
+- **Blocked Operations**:
+  - Customer cannot mark attendance (`POST /api/customer/attendance` returns 409 Conflict).
+  - Customer cannot vote in the lunch poll (`POST /api/customer/poll/vote` returns 409 Conflict).
+  - Meal token generation is blocked (`409 Conflict`).
+- **Non-Negative Balance Invariant**: Tiffins can never decrement below 0.
+
+### 4. Owner Cash Recharge
+- OWNER adds a positive integer quantity of tiffins (`POST /api/owner/customers/:customerId/recharge`).
+- **Atomic Transaction**:
+  1. Increment `CustomerProfile.remainingTiffins` by `+amount`.
+  2. Create immutable `TiffinTransaction` with `quantity = +amount` and `type = "CASH_RECHARGE"`.
+  3. Create `AuditLog` entry with `action = "OWNER_CASH_RECHARGE"`.
+- **Automatic Unblocking**: The customer's balance is now `> 0`, immediately and automatically lifting payment suspension without requiring manual state sync.
+- **Ledger Invariant**:
+  $$\sum \text{TiffinTransaction.quantity} == \text{CustomerProfile.remainingTiffins}$$
+
+### 5. Customer & Owner Messages
+- Implemented on the existing `Message` model (`UNREAD`, `READ`, `RESOLVED`).
+- **Customer**: Can create queries/complaints/requests (`POST /api/customer/messages`) and view their own message history (`GET /api/customer/messages`). Customers cannot view other customers' messages or mark messages as resolved.
+- **Owner**: Can list messages (`GET /api/owner/messages`), mark as `READ` (`PATCH ...`), and mark as `RESOLVED` (`PATCH ...`), capturing `readAt` and `resolvedAt` timestamps.
+
+---
+
+## 13. Features Deferred to Future Phases
+
+The following capabilities are deliberately **NOT** implemented in Phase 6:
+- ❌ Automatic 4:00 PM IST Lunch finalization
+- ❌ Automatic 11:00 PM IST Dinner finalization
+- ❌ Background cron jobs / node-cron schedulers
+- ❌ Analytics and operational summary dashboards
+- ❌ XLSX / Excel report export
+- ❌ Railway cloud deployment & webhooks
+- ❌ Frontend client integration
+
 

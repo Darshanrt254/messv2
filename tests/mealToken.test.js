@@ -159,6 +159,11 @@ describe("Phase 5: Meal Token Generation + Exactly-Once Tiffin Deduction Tests",
       return { count: 1 };
     };
 
+    prisma.serviceSuspension = {
+      findFirst: async () => null,
+      findMany: async () => [],
+    };
+
     // Attendance mock
     prisma.attendance.findUnique = async ({ where, include }) => {
       let record = null;
