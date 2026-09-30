@@ -87,6 +87,9 @@ model User {
   createdSuspensions  ServiceSuspension[] @relation("UserCreatedSuspensions")
   auditLogs           AuditLog[]          @relation("UserAuditLogs")
 
+  // Server-side authentication sessions
+  sessions Session[]
+
   @@map("users")
 }
 
@@ -306,4 +309,22 @@ model AuditLog {
   @@index([entityType, entityId])
   @@index([actorId, createdAt])
   @@map("audit_logs")
+}
+
+// ==================================================
+// 12. SESSION (Server-side Authentication Sessions)
+// ==================================================
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([token])
+  @@map("sessions")
 }

@@ -1,0 +1,232 @@
+# Swayamsiddha Backend
+
+Backend API service for the **Swayamsiddha Tiffin Management System**. Built with Node.js, Express, Prisma ORM, and PostgreSQL.
+
+---
+
+## 1. Installation
+
+Ensure Node.js (v20+ recommended, v22 LTS tested) and npm are installed:
+
+```bash
+# Clone the repository and navigate to backend directory
+cd swayamsiddha-backend
+
+# Install dependencies
+npm install
+```
+
+---
+
+## 2. Environment Variables
+
+Create a `.env` file in the root directory by copying `.env.example`:
+
+```bash
+cp .env.example .env
+```
+
+| Variable | Description | Default / Example |
+| :--- | :--- | :--- |
+| `PORT` | Express server port | `5000` |
+| `NODE_ENV` | Application environment (`development`, `production`, `test`) | `development` |
+| `DATABASE_URL` | PostgreSQL connection string | `postgresql://user:pass@localhost:5432/swayamsiddha_dev?schema=public` |
+| `SESSION_SECRET` | Secret key for session management | `your_secure_secret_here` |
+| `SESSION_COOKIE_NAME` | Name of the authentication cookie | `swayamsiddha_session` |
+| `SESSION_MAX_AGE_DAYS` | Session validity duration in days | `7` |
+| `FRONTEND_ORIGIN` | Allowed client origin for CORS with credentials | `http://localhost:5173` |
+| `SEED_OWNER_PASSWORD` | Optional password for development seed OWNER | `dev_owner_password_123` |
+| `SEED_CUSTOMER_PASSWORD` | Optional password for development seed CUSTOMER | `dev_customer_password_123` |
+
+> ⚠️ **Security Notice**: Never commit `.env` or production credentials to version control.
+
+---
+
+## 3. Running PostgreSQL Locally
+
+You can use a local PostgreSQL server or Docker container for development:
+
+```bash
+# Using Docker (optional quick local setup)
+docker run --name swayamsiddha-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=swayamsiddha_dev -p 5432:5432 -d postgres:15
+```
+
+Ensure your `DATABASE_URL` in `.env` matches your database host, port, username, password, and database name.
+
+---
+
+## 4. Prisma Setup & Migrations
+
+```bash
+# Validate Prisma schema
+npm run prisma:validate
+
+# Format Prisma schema
+npm run prisma:format
+
+# Generate Prisma Client
+npm run prisma:generate
+
+# Apply migrations to development database
+npm run prisma:migrate:dev
+
+# Run development seed script
+npm run db:seed
+```
+
+---
+
+## 5. Starting the Express Server
+
+```bash
+# Start in production mode
+npm start
+
+# Start in development mode with automatic reload
+npm run dev
+```
+
+The server will start listening at `http://localhost:5000`.
+
+---
+
+## 6. Authentication Endpoints
+
+All authentication endpoints are prefixed with `/api/auth`:
+
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/auth/login` | Public | Authenticates credentials and sets session cookie |
+| `POST` | `/api/auth/logout` | Authenticated | Revokes server-side session and clears cookie |
+| `GET` | `/api/auth/me` | Authenticated | Returns current authenticated user profile |
+| `GET` | `/api/test/owner` | Owner only | Temporary development route for verifying role enforcement |
+| `GET` | `/api/test/customer`| Customer only| Temporary development route for verifying role enforcement |
+
+---
+
+## 7. Request / Response Examples
+
+### A. Login (`POST /api/auth/login`)
+
+**Request:**
+```http
+POST /api/auth/login HTTP/1.1
+Content-Type: application/json
+
+{
+  "loginIdentifier": "owner@swayamsiddha.local",
+  "password": "your_password"
+}
+```
+
+**Success Response (`200 OK`):**
+```json
+{
+  "message": "Login successful",
+  "user": {
+    "id": "18f9bc8e-28b3-4f93-b67e-405cb67643b1",
+    "loginIdentifier": "owner@swayamsiddha.local",
+    "role": "OWNER",
+    "customerProfile": null
+  }
+}
+```
+*Note: Header `Set-Cookie: swayamsiddha_session=<token>; HttpOnly; Path=/; SameSite=Lax` is returned.*
+
+**Failure Response (`401 Unauthorized`):**
+```json
+{
+  "error": "Invalid login identifier or password"
+}
+```
+*(Generic error message prevents username/email enumeration).*
+
+---
+
+### B. Current User (`GET /api/auth/me`)
+
+**Request:**
+```http
+GET /api/auth/me HTTP/1.1
+Cookie: swayamsiddha_session=<token>
+```
+
+**Success Response (`200 OK`):**
+```json
+{
+  "user": {
+    "id": "18f9bc8e-28b3-4f93-b67e-405cb67643b1",
+    "loginIdentifier": "owner@swayamsiddha.local",
+    "role": "OWNER",
+    "customerProfile": null
+  }
+}
+```
+
+**Failure Response (`401 Unauthorized`):**
+```json
+{
+  "error": "Authentication required. Please log in."
+}
+```
+
+---
+
+### C. Logout (`POST /api/auth/logout`)
+
+**Request:**
+```http
+POST /api/auth/logout HTTP/1.1
+Cookie: swayamsiddha_session=<token>
+```
+
+**Success Response (`200 OK`):**
+```json
+{
+  "message": "Logged out successfully"
+}
+```
+*Note: Cookie is cleared with `Expires=Thu, 01 Jan 1970 00:00:00 GMT`.*
+
+---
+
+## 8. How Authentication Cookies Work
+
+1. **HttpOnly**: JavaScript running in the browser cannot read or access the cookie, mitigating cross-site scripting (XSS) credential theft.
+2. **Server-Side Session**: Only an unguessable 256-bit random cryptographic token is sent in the cookie. User profile, roles, and expiration are verified on the server against the database.
+3. **SameSite**: Set to `Lax` in development and `Strict` in production to prevent Cross-Site Request Forgery (CSRF).
+4. **Secure**: Sent only over HTTPS in production environments.
+5. **No LocalStorage**: Tokens are never stored in browser `localStorage` or `sessionStorage`.
+
+---
+
+## 9. How OWNER / CUSTOMER Authorization Works
+
+Authorization is strictly enforced by the backend middleware chain:
+
+1. **`requireAuth`**: Reads the session cookie, queries PostgreSQL for an active unexpired session, and attaches the authoritative user object to `req.user`.
+2. **`requireRole('OWNER')` / `requireRole('CUSTOMER')`**:
+   - Inspects `req.user.role` derived from the database.
+   - If the user has the required role, the request proceeds to the handler.
+   - If the user does not have the required role, the middleware rejects the request with **HTTP 403 Forbidden** (`Access denied. Insufficient permissions.`).
+   - If unauthenticated, rejects with **HTTP 401 Unauthorized**.
+3. **No Client Trust**: Client-supplied role claims (e.g., in request body or headers) are completely ignored.
+
+---
+
+## 10. Running the Automated Tests
+
+Automated tests verify all authentication flows and role enforcement scenarios without external test runner bloat:
+
+```bash
+npm test
+```
+
+### Verified Test Suite:
+- **Test A**: `POST /api/auth/login` (OWNER) $\rightarrow$ Returns 200, sets HTTP-only cookie, returns OWNER.
+- **Test B**: `POST /api/auth/login` (CUSTOMER) $\rightarrow$ Returns 200, sets cookie, returns CUSTOMER profile with remaining tiffins.
+- **Test C**: `POST /api/auth/login` (Invalid credentials) $\rightarrow$ Returns 401 with generic error, no cookie set.
+- **Test D**: `GET /api/auth/me` (Authenticated) $\rightarrow$ Returns 200 with authenticated identity.
+- **Test E**: `GET /api/auth/me` (Unauthenticated) $\rightarrow$ Returns 401 Unauthorized.
+- **Test F**: `POST /api/auth/logout` $\rightarrow$ Returns 200, clears cookie, invalidates session (subsequent `/me` returns 401).
+- **Test G**: Role protection on `/api/test/owner` $\rightarrow$ Allows OWNER (200), forbids CUSTOMER (403), rejects unauthenticated (401).

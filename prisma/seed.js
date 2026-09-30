@@ -11,13 +11,13 @@
  */
 
 import { PrismaClient } from "@prisma/client";
-import crypto from "node:crypto";
+import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 
-// Helper to hash passwords using sha256 for development seed purposes only
-function hashDevPassword(password) {
-  return crypto.createHash("sha256").update(password).digest("hex");
+// Helper to hash passwords using bcrypt for development seed
+async function hashDevPassword(password) {
+  return bcrypt.hash(password, 10);
 }
 
 async function main() {
@@ -27,15 +27,20 @@ async function main() {
   const ownerPassword = process.env.SEED_OWNER_PASSWORD || "dev_owner_password_123";
   const customerPassword = process.env.SEED_CUSTOMER_PASSWORD || "dev_customer_password_123";
 
+  const hashedOwnerPassword = await hashDevPassword(ownerPassword);
+  const hashedCustomerPassword = await hashDevPassword(customerPassword);
+
   // 1. Create Development OWNER User
   console.log("Creating development OWNER user...");
   const ownerUser = await prisma.user.upsert({
     where: { loginIdentifier: "owner@swayamsiddha.local" },
-    update: {},
+    update: {
+      passwordHash: hashedOwnerPassword,
+    },
     create: {
       role: "OWNER",
       loginIdentifier: "owner@swayamsiddha.local",
-      passwordHash: hashDevPassword(ownerPassword),
+      passwordHash: hashedOwnerPassword,
     },
   });
 
@@ -44,6 +49,7 @@ async function main() {
   const customerUser = await prisma.user.upsert({
     where: { loginIdentifier: "customer@swayamsiddha.local" },
     update: {
+      passwordHash: hashedCustomerPassword,
       customerProfile: {
         update: {
           remainingTiffins: 55,
@@ -53,7 +59,7 @@ async function main() {
     create: {
       role: "CUSTOMER",
       loginIdentifier: "customer@swayamsiddha.local",
-      passwordHash: hashDevPassword(customerPassword),
+      passwordHash: hashedCustomerPassword,
       customerProfile: {
         create: {
           name: "Dev Test Customer",

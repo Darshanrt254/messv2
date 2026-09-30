@@ -3,8 +3,11 @@
   "version": "1.0.0",
   "description": "Swayamsiddha Tiffin Management System - Backend",
   "type": "module",
-  "main": "index.js",
+  "main": "src/server.js",
   "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test tests/**/*.test.js",
     "prisma:format": "prisma format",
     "prisma:validate": "prisma validate",
     "prisma:generate": "prisma generate",
@@ -20,15 +23,22 @@
     "swayamsiddha",
     "tiffin-management",
     "prisma",
-    "postgresql"
+    "postgresql",
+    "express"
   ],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "@prisma/client": "^6.4.1",
-    "dotenv": "^18.0.4"
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.4",
+    "express": "^5.2.1",
+    "helmet": "^8.3.0"
   },
   "devDependencies": {
-    "prisma": "^6.4.1"
+    "prisma": "^6.4.1",
+    "supertest": "^7.3.0"
   }
 }
