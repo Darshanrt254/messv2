@@ -128,6 +128,9 @@ The server will start listening at `http://localhost:5000`.
 | `POST` | `/api/owner/meal-tokens/:attendanceId` | Owner only | Generates meal token and executes exactly-once tiffin deduction |
 | `GET` | `/api/owner/messages` | Owner only | Lists customer messages with filtering options |
 | `PATCH` | `/api/owner/messages/:messageId` | Owner only | Updates message status (`READ` or `RESOLVED`) |
+| `POST` | `/api/owner/automation/finalize-lunch` | Owner only | Manually triggers 4:00 PM IST Lunch finalization (testing/dev) |
+| `POST` | `/api/owner/automation/finalize-dinner` | Owner only | Manually triggers 11:00 PM IST Dinner finalization (testing/dev) |
+| `GET` | `/api/owner/automation/status` | Owner only | Inspects daily scheduler status and configured jobs |
 
 ---
 
@@ -366,6 +369,34 @@ npm test
 - **Test 8**: Owner resolves message and sets `resolvedAt` timestamp.
 - **Test 9**: Attempting to modify an already `RESOLVED` message is rejected (400 Bad Request).
 
+### Phase 7: Automatic Daily Meal Finalization & Scheduler Test Suite (`tests/dailyFinalization.test.js`)
+- **Tests 1-6**: Unmarked weekday lunch becomes `PRESENT` + `RESTAURANT` + `AUTO` with exactly one token generated, exactly one `-1` ledger entry, and balance decremented by 1.
+- **Test 7**: Existing `PRESENT` + `COLLEGE` lunch is untouched (location preserved, no duplicate token).
+- **Test 8**: Existing `PRESENT` + `RESTAURANT` with token is untouched.
+- **Test 9**: Existing `PRESENT` + `RESTAURANT` without token gets exactly one token generated.
+- **Test 10**: Existing `ABSENT` lunch is untouched (no token, no deduction).
+- **Test 11**: Service-suspended customer is not given a token and marked `ABSENT` with source `SUSPENSION`.
+- **Tests 12 & 13**: Payment-suspended customer (balance 0) is skipped without token; balance never becomes negative.
+- **Test 14**: Poll vote is not created by automatic finalization.
+- **Test 15**: Running lunch finalization twice produces no duplicate token or deduction (Idempotency).
+- **Tests 16-20**: Unmarked dinner becomes `PRESENT` + `RESTAURANT` + `AUTO` with token and `-1` deduction.
+- **Test 21**: Existing `ABSENT` dinner is untouched.
+- **Test 22**: Existing `PRESENT` dinner is not duplicated.
+- **Tests 23 & 24**: Payment-suspended and service-suspended customers are skipped for dinner.
+- **Test 25**: Sunday dinner is strictly excluded (no attendance, no token, no deduction).
+- **Test 26**: Saturday lunch finalization operates as restaurant service.
+- **Tests 27 & 28**: Saturday dinner operates as restaurant service with no poll created.
+- **Tests 29 & 30**: Concurrent simultaneous finalizations cannot create duplicate tokens or double deduct.
+- **Test 31**: Balance = 1 race condition results in exactly one successful token; balance reaches 0 (never negative).
+- **Tests 32-34**: Token generation failure reverts attendance safely and reports failed count.
+- **Test 35**: Rerunning after a partial failure safely completes remaining work.
+- **Test 36**: 4:00 PM IST boundary handled correctly (rejected before 16:00 IST when `enforceTimeWindow=true`).
+- **Test 37**: 11:00 PM IST boundary handled correctly (rejected before 23:00 IST when `enforceTimeWindow=true`).
+- **Test 38**: IST business date is used correctly across timezone offsets.
+- **Test 39**: Owner can manually trigger lunch finalization via `POST /api/owner/automation/finalize-lunch`.
+- **Test 40**: Customer cannot access owner automation endpoints (403 Forbidden).
+- **Test 41**: Owner can inspect scheduler status via `GET /api/owner/automation/status`.
+
 ---
 
 ## 11. Phase 5 Architecture: Meal Token & Exactly-Once Tiffin Deduction
@@ -496,12 +527,75 @@ getCustomerServiceStatus(customerId, date)
 
 ---
 
-## 13. Features Deferred to Future Phases
+## 13. Phase 7 Architecture: Automatic Daily Meal Finalization & Scheduler
 
-The following capabilities are deliberately **NOT** implemented in Phase 6:
-- ❌ Automatic 4:00 PM IST Lunch finalization
-- ❌ Automatic 11:00 PM IST Dinner finalization
-- ❌ Background cron jobs / node-cron schedulers
+### 1. Single Authoritative Token & Deduction Path
+Automation **never** manipulates tiffin balance directly (`remainingTiffins -= 1`), creates `MealToken` records directly, or inserts ledger entries independently.
+Instead, the automated workflow operates strictly as:
+```
+dailyFinalizationService
+    ↓
+find eligible customer / prepare attendance (status: PRESENT, location: RESTAURANT, source: AUTO)
+    ↓
+mealTokenService.generateMealToken(attendance.id)
+    ↓
+Phase 5 atomic transaction (MealCounter allocation, MealToken creation, -1 ledger entry, conditional balance decrement, audit log)
+```
+
+### 2. Business Time & Calendar Enforcement
+- All decisions operate strictly in **India Standard Time (`Asia/Kolkata`: UTC+5:30)** via `businessTime.js`.
+- Eliminates server timezone discrepancies and ensures deterministic daily boundaries.
+
+### 3. 4:00 PM IST Lunch Finalization Rules
+- Executes Monday through Saturday at 16:00 IST:
+  - **UNMARKED Lunch**: Converted to `PRESENT`, `location: RESTAURANT`, `source: AUTO`, followed by meal token generation and `-1` tiffin deduction.
+  - **Existing PRESENT + COLLEGE**: Retained as `COLLEGE`; no modification, no duplicate token.
+  - **Existing PRESENT + RESTAURANT**: If token already exists, do nothing (`alreadyFinalized`). If missing token, generate missing token.
+  - **Existing ABSENT**: Untouched; no token, no deduction (`skippedAbsent`).
+  - **Service Suspended**: Marked `ABSENT` with source `SUSPENSION`; no token, no deduction (`skippedSuspended`).
+  - **Payment Suspended (`remainingTiffins <= 0`)**: Skipped; not converted to paid meal (`skippedPaymentSuspended`).
+  - **Poll Votes**: Automation never creates poll votes.
+
+### 4. 11:00 PM IST Dinner Finalization Rules
+- Executes Monday through Saturday at 23:00 IST:
+  - **UNMARKED Dinner**: Converted to `PRESENT`, `location: RESTAURANT`, `source: AUTO`, followed by meal token generation and `-1` tiffin deduction.
+  - **Existing PRESENT**: If token exists, do nothing (`alreadyFinalized`). If missing, token is generated.
+  - **Existing ABSENT**: Untouched (`skippedAbsent`).
+  - **Sunday Dinner Rule**: Strictly excluded! Sunday has no dinner service. The service aborts immediately with 0 processed records.
+
+### 5. Saturday & Weekend Rules
+- Saturday Lunch operates as restaurant service (no poll).
+- Saturday Dinner operates as restaurant service.
+- Sunday Lunch operates as restaurant service (no poll).
+- Sunday Dinner is completely unavailable.
+
+### 6. Idempotency & Concurrency Safety
+- **Rerunnability**: Running finalization 1 time or 10 times yields identical state. Existing tokens return `isNew: false` and are counted as `alreadyFinalized`.
+- **Database-Level Protection**:
+  - `Attendance` enforces `@@unique([customerId, date, mealType])`.
+  - `MealToken` enforces `@unique([attendanceId])`.
+  - Concurrent executions are safely serialized; duplicate tokens and double deductions are impossible.
+- **Balance = 1 Race Condition**: If a customer has 1 tiffin remaining and two processes compete, the atomic conditional update `where: { remainingTiffins: { gt: 0 } }` ensures exactly one succeeds. Balance reaches 0 and never goes negative.
+
+### 7. Scheduler Implementation (`dailyScheduler.js`)
+- Uses `node-cron` with explicit `timezone: "Asia/Kolkata"`.
+- Schedules:
+  - `0 16 * * *` (4:00 PM IST Lunch)
+  - `0 23 * * *` (11:00 PM IST Dinner)
+- Initialized on server start in `server.js`, stopped gracefully on `SIGTERM` / `SIGINT`.
+- Isolated from unit test execution (tests run through `app.js`).
+
+### 8. Manual Testing Mechanism
+- Owner-only HTTP endpoints enable deterministic testing without waiting for 16:00 or 23:00 IST:
+  - `POST /api/owner/automation/finalize-lunch`
+  - `POST /api/owner/automation/finalize-dinner`
+  - `GET /api/owner/automation/status`
+
+---
+
+## 14. Features Deferred to Future Phases
+
+The following capabilities are deliberately **NOT** implemented in Phase 7:
 - ❌ Analytics and operational summary dashboards
 - ❌ XLSX / Excel report export
 - ❌ Railway cloud deployment & webhooks
