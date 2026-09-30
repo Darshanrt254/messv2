@@ -101,18 +101,24 @@ The server will start listening at `http://localhost:5000`.
 | `GET` | `/api/test/owner` | Owner only | Temporary development route for verifying role enforcement |
 | `GET` | `/api/test/customer`| Customer only| Temporary development route for verifying role enforcement |
 
-### Customer Profile Endpoints (`/api/customer`)
+### Customer Profile & Meal Endpoints (`/api/customer`)
 | Method | Endpoint | Access | Description |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/api/customer/me` | Customer only | Returns authenticated customer's own profile (`req.user.id`) |
+| `GET` | `/api/customer/meals/today` | Customer only | Returns today's meal, attendance, and poll status in IST |
+| `POST` | `/api/customer/attendance` | Customer only | Marks attendance (`PRESENT`/`ABSENT`). Enforces immutability. |
+| `GET` | `/api/customer/poll/today` | Customer only | Returns today's lunch location poll status and eligibility |
+| `POST` | `/api/customer/poll/vote` | Customer only | Casts single immutable vote (`COLLEGE`/`RESTAURANT`) |
 
-### Owner Customer Management Endpoints (`/api/owner/customers`)
+### Owner Management Endpoints (`/api/owner`)
 | Method | Endpoint | Access | Description |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/api/owner/customers` | Owner only | Paginated list of customers (`?page=1&limit=20&search=`) |
 | `GET` | `/api/owner/customers/:customerId` | Owner only | Detailed safe profile of a specific customer |
 | `POST` | `/api/owner/customers` | Owner only | Transactionally creates User, CustomerProfile, and initial ledger |
 | `PATCH` | `/api/owner/customers/:customerId` | Owner only | Updates basic customer info (`name`, `phone`, `profilePictureUrl`) |
+| `GET` | `/api/owner/attendance` | Owner only | Operational attendance records with filters (`date`, `customerId`, `mealType`, `status`) |
+| `PATCH` | `/api/owner/attendance/:attendanceId` | Owner only | Manually overrides attendance with domain validation & audit log |
 
 ---
 
@@ -258,3 +264,29 @@ npm test
 - **Test L**: CUSTOMER attempting `PATCH /api/owner/customers/:customerId` $\rightarrow$ Returns 403 Forbidden.
 - **Test M**: OWNER requesting non-existent customer `GET /api/owner/customers/:id` $\rightarrow$ Returns 404 Not Found.
 - **Test N**: Ledger consistency $\rightarrow$ Newly created customer ledger sum strictly equals `remainingTiffins`.
+
+### Phase 4: Attendance & Lunch Poll Test Suite (`tests/attendance.test.js`)
+- **Test A**: Weekday lunch `PRESENT` $\rightarrow$ Status `PRESENT`, location `null`, poll remains available.
+- **Test B**: Weekday lunch `ABSENT` $\rightarrow$ Status `ABSENT`, location `null`, poll becomes unavailable.
+- **Test C**: Attendance immutability $\rightarrow$ `PRESENT` $\rightarrow$ `ABSENT` rejected with 409 Conflict.
+- **Test D**: Vote `COLLEGE` after `PRESENT` $\rightarrow$ Updates attendance location to `COLLEGE`.
+- **Test E**: Vote `RESTAURANT` without prior attendance $\rightarrow$ Transactionally creates PollVote and Attendance `PRESENT` + `RESTAURANT`.
+- **Test F**: Vote after Lunch `ABSENT` $\rightarrow$ Rejected (400), zero PollVotes created.
+- **Test G**: Second vote $\rightarrow$ `COLLEGE` $\rightarrow$ `RESTAURANT` rejected with 409 Conflict, original vote preserved.
+- **Test H**: Vote before 06:00 IST $\rightarrow$ Rejected (400).
+- **Test I**: Vote after 11:30 IST $\rightarrow$ Rejected (400).
+- **Test J**: Saturday poll $\rightarrow$ Returns `pollExists: false` (reason: `WEEKEND`).
+- **Test K**: Saturday Lunch `PRESENT` $\rightarrow$ Automatically sets location to `RESTAURANT`.
+- **Test L**: Saturday Dinner `PRESENT` $\rightarrow$ Automatically sets location to `RESTAURANT`.
+- **Test M**: Sunday Lunch `PRESENT` $\rightarrow$ Sets location to `RESTAURANT`.
+- **Test N**: Sunday dinner marking $\rightarrow$ Rejected (400), `dinner.serviceAvailable = false`.
+- **Test O**: Dinner `COLLEGE` $\rightarrow$ Rejected by domain rules.
+- **Test P**: CUSTOMER accessing `GET /api/owner/attendance` $\rightarrow$ Returns 403 Forbidden.
+- **Test Q**: OWNER accessing `GET /api/owner/attendance` $\rightarrow$ Returns 200 with operational records.
+- **Test R**: OWNER `PATCH /api/owner/attendance/:id` $\rightarrow$ Overrides attendance, creates `AuditLog`.
+- **Test S**: CUSTOMER accessing `PATCH /api/owner/attendance/:id` $\rightarrow$ Returns 403 Forbidden.
+- **Test T**: Zero MealTokens created by Phase 4 operations.
+- **Test U**: Customer `remainingTiffins` balance unchanged by Phase 4 operations.
+- **Test V**: Zero `MEAL_TOKEN` transactions created by Phase 4 operations.
+- **Test W**: Poll uniqueness $\rightarrow$ Repeated/concurrent poll retrieval creates exactly one poll record.
+- **Test X**: Customer isolation $\rightarrow$ Customer retrieves only their own meal and attendance state.
