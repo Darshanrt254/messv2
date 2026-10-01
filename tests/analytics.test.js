@@ -132,9 +132,9 @@ describe("Phase 8: Owner Analytics & Operational Summary API Tests", () => {
     ];
 
     pollVotesStore = [
-      { pollId, customerId: custB_id, location: "COLLEGE", poll: pollsStore[0] },
-      { pollId, customerId: custA_id, location: "RESTAURANT", poll: pollsStore[0] },
-      { pollId, customerId: custD_id, location: "RESTAURANT", poll: pollsStore[0] },
+      { pollId, customerId: custB_id, option: "COLLEGE", location: "COLLEGE", poll: pollsStore[0] },
+      { pollId, customerId: custA_id, option: "RESTAURANT", location: "RESTAURANT", poll: pollsStore[0] },
+      { pollId, customerId: custD_id, option: "RESTAURANT", location: "RESTAURANT", poll: pollsStore[0] },
     ];
 
     // Messages
@@ -320,11 +320,12 @@ describe("Phase 8: Owner Analytics & Operational Summary API Tests", () => {
 
     prisma.pollVote = {
       groupBy: async ({ by }) => {
+        const groupField = by?.[0] || "option";
         const map = new Map();
         for (const item of pollVotesStore) {
-          const key = item.location;
+          const key = item[groupField] || item.option || item.location;
           if (!map.has(key)) {
-            map.set(key, { location: key, _count: 0 });
+            map.set(key, { [groupField]: key, option: key, location: key, _count: 0 });
           }
           map.get(key)._count++;
         }

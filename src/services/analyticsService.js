@@ -134,7 +134,7 @@ export async function getOverviewAnalytics({ from: fromStr, to: toStr } = {}) {
   let pollRestaurant = 0;
   try {
     const pollVoteGroups = await prisma.pollVote.groupBy({
-      by: ["location"],
+      by: ["option"],
       where: {
         poll: {
           date: { gte: range.fromDate, lte: range.toDate },
@@ -144,8 +144,8 @@ export async function getOverviewAnalytics({ from: fromStr, to: toStr } = {}) {
     });
 
     for (const g of pollVoteGroups) {
-      if (g.location === "COLLEGE") pollCollege = g._count;
-      if (g.location === "RESTAURANT") pollRestaurant = g._count;
+      if (g.option === "COLLEGE") pollCollege = g._count;
+      if (g.option === "RESTAURANT") pollRestaurant = g._count;
     }
   } catch {
     pollCollege = 0;
@@ -580,7 +580,7 @@ export async function getPollAnalytics({ from: fromStr, to: toStr } = {}) {
 
   try {
     const voteGroups = await prisma.pollVote.groupBy({
-      by: ["location"],
+      by: ["option"],
       where: {
         poll: {
           date: { gte: range.fromDate, lte: range.toDate },
@@ -590,8 +590,8 @@ export async function getPollAnalytics({ from: fromStr, to: toStr } = {}) {
     });
 
     for (const g of voteGroups) {
-      if (g.location === "COLLEGE") collegeVotes = g._count;
-      if (g.location === "RESTAURANT") restaurantVotes = g._count;
+      if (g.option === "COLLEGE") collegeVotes = g._count;
+      if (g.option === "RESTAURANT") restaurantVotes = g._count;
     }
   } catch {
     collegeVotes = 0;

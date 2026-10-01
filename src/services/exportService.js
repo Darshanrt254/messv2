@@ -346,8 +346,8 @@ export async function generateOperationalXlsx({ from: fromStr, to: toStr } = {})
       pollStatus: v.poll?.status || "-",
       customerName: v.customer?.name || "-",
       phone: v.customer?.phone || "-",
-      vote: toTitleCase(v.location),
-      createdAt: formatISTDateTime(v.createdAt),
+      vote: toTitleCase(v.option || v.location),
+      createdAt: formatISTDateTime(v.votedAt || v.createdAt),
     });
   }
 
