@@ -12,12 +12,24 @@ export async function createToken(req, res, next) {
 
     const statusCode = result.isNew ? 201 : 200;
 
+    const formattedToken = result.mealToken
+      ? {
+          ...result.mealToken,
+          token: result.mealToken.token,
+          tokenString: result.mealToken.token,
+          serialNumber: result.mealToken.serialNumber,
+          counterNumber: result.mealToken.serialNumber,
+        }
+      : null;
+
     return res.status(statusCode).json({
       message: result.isNew
         ? "Meal token generated successfully."
         : "Existing meal token returned.",
       isNew: result.isNew,
-      mealToken: result.mealToken,
+      mealToken: formattedToken,
+      token: formattedToken?.token,
+      tokenString: formattedToken?.tokenString,
     });
   } catch (error) {
     next(error);

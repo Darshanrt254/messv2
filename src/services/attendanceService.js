@@ -55,8 +55,14 @@ export async function getCustomerTodayMealState(userId, date = getNow()) {
   const formatTokenInfo = (record) => {
     if (!record || !record.mealToken) return null;
     return {
-      tokenId: record.mealToken.id,
+      id: record.mealToken.id,
+      tokenId: record.mealToken.token,
       token: record.mealToken.token,
+      tokenString: record.mealToken.token,
+      serialNumber: record.mealToken.serialNumber,
+      counterNumber: record.mealToken.serialNumber,
+      mealType: record.mealType,
+      location: record.location,
       generatedAt: record.mealToken.createdAt,
     };
   };
@@ -321,6 +327,9 @@ export async function updateAttendanceByOwner(attendanceId, { status, location }
 
   // Validate location combinations
   if (existing.mealType === "DINNER") {
+    if (isSunday(existing.date)) {
+      throw ApiError.badRequest("Dinner service is not available on Sunday.");
+    }
     if (newLocation === "COLLEGE") {
       throw ApiError.badRequest("College location is not permitted for dinner.");
     }
@@ -336,6 +345,9 @@ export async function updateAttendanceByOwner(attendanceId, { status, location }
     }
     if (newLocation !== null && !["COLLEGE", "RESTAURANT"].includes(newLocation)) {
       throw ApiError.badRequest("Invalid lunch location.");
+    }
+    if ((isSaturday(existing.date) || isSunday(existing.date)) && newLocation === "COLLEGE") {
+      throw ApiError.badRequest("Weekend lunch cannot have COLLEGE location. Saturday and Sunday lunch is RESTAURANT only.");
     }
   }
 

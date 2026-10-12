@@ -5,7 +5,8 @@ import { getNow } from "../utils/businessTime.js";
 /**
  * Creates a new message from the authenticated customer to the owner.
  */
-export async function createCustomerMessage(userId, { message }) {
+export async function createCustomerMessage(userId, payload = {}) {
+  const message = payload?.message || payload?.content;
   if (!userId) {
     throw ApiError.unauthorized("Authentication required.");
   }
@@ -59,7 +60,10 @@ export async function listCustomerMessages(userId) {
     orderBy: { createdAt: "desc" },
   });
 
-  return messages;
+  return messages.map((m) => ({
+    ...m,
+    content: m.message,
+  }));
 }
 
 /**
@@ -91,6 +95,7 @@ export async function listOwnerMessages({ status, customerId, page = 1, limit = 
             id: true,
             name: true,
             phone: true,
+            profilePictureUrl: true,
             user: {
               select: {
                 id: true,
@@ -103,8 +108,14 @@ export async function listOwnerMessages({ status, customerId, page = 1, limit = 
     }),
   ]);
 
+  const formattedMessages = messages.map((m) => ({
+    ...m,
+    content: m.message,
+    customerProfile: m.customer,
+  }));
+
   return {
-    messages,
+    messages: formattedMessages,
     pagination: {
       total,
       page: parsedPage,

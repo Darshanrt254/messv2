@@ -10,8 +10,8 @@ let isRunning = false;
  * Starts the daily automation scheduler with Asia/Kolkata timezone.
  *
  * Schedules:
- * 1. Lunch Finalization at 16:00 IST (0 16 * * *)
- * 2. Dinner Finalization at 23:00 IST (0 23 * * *)
+ * 1. Lunch Finalization at 14:00 IST (0 14 * * *)
+ * 2. Dinner Finalization at 21:00 IST (0 21 * * *)
  */
 export function startDailyScheduler() {
   if (isRunning) {
@@ -19,12 +19,12 @@ export function startDailyScheduler() {
     return;
   }
 
-  // 1. 4:00 PM IST Lunch finalization
+  // 1. 2:00 PM IST Lunch finalization
   lunchTask = cron.schedule(
-    "0 16 * * *",
+    "0 14 * * *",
     async () => {
       const ist = getISTComponents();
-      console.log(`⏰ [Scheduler] Triggering 4:00 PM IST Lunch Finalization for ${ist.dateString}...`);
+      console.log(`⏰ [Scheduler] Triggering 2:00 PM IST Lunch Finalization for ${ist.dateString}...`);
       try {
         const summary = await finalizeLunchForDate(getNow());
         console.log("✅ [Scheduler] Lunch finalization complete:", JSON.stringify(summary));
@@ -38,12 +38,12 @@ export function startDailyScheduler() {
     }
   );
 
-  // 2. 11:00 PM IST Dinner finalization
+  // 2. 9:00 PM IST Dinner finalization
   dinnerTask = cron.schedule(
-    "0 23 * * *",
+    "0 21 * * *",
     async () => {
       const ist = getISTComponents();
-      console.log(`⏰ [Scheduler] Triggering 11:00 PM IST Dinner Finalization for ${ist.dateString}...`);
+      console.log(`⏰ [Scheduler] Triggering 9:00 PM IST Dinner Finalization for ${ist.dateString}...`);
       try {
         const summary = await finalizeDinnerForDate(getNow());
         console.log("✅ [Scheduler] Dinner finalization complete:", JSON.stringify(summary));
@@ -59,8 +59,8 @@ export function startDailyScheduler() {
 
   isRunning = true;
   console.log("🕒 Daily Scheduler started successfully (Timezone: Asia/Kolkata).");
-  console.log("   - 4:00 PM IST: Lunch finalization");
-  console.log("   - 11:00 PM IST: Dinner finalization");
+  console.log("   - 2:00 PM IST: Lunch finalization");
+  console.log("   - 9:00 PM IST: Dinner finalization");
 }
 
 /**

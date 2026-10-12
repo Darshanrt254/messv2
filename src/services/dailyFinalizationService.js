@@ -11,23 +11,23 @@ import { getCustomerServiceStatus } from "./customerEligibilityService.js";
 import { generateMealToken } from "./mealTokenService.js";
 
 /**
- * Checks whether Lunch finalization is due for the given time (at or after 16:00 IST).
+ * Checks whether Lunch finalization is due for the given time (at or after 14:00 IST).
  * @param {Date} [date]
  * @returns {boolean}
  */
 export function isLunchFinalizationDue(date = getNow()) {
   const ist = getISTComponents(date);
-  return ist.hours >= 16;
+  return ist.hours >= 14;
 }
 
 /**
- * Checks whether Dinner finalization is due for the given time (at or after 23:00 IST).
+ * Checks whether Dinner finalization is due for the given time (at or after 21:00 IST).
  * @param {Date} [date]
  * @returns {boolean}
  */
 export function isDinnerFinalizationDue(date = getNow()) {
   const ist = getISTComponents(date);
-  return ist.hours >= 23;
+  return ist.hours >= 21;
 }
 
 /**
@@ -245,12 +245,12 @@ export async function finalizeMealForDate({ date = getNow(), mealType, options =
   if (options.enforceTimeWindow) {
     if (mealType === "LUNCH" && !isLunchFinalizationDue(effectiveDate)) {
       throw ApiError.badRequest(
-        "Lunch finalization is not due yet. Scheduled execution is allowed at or after 16:00 IST."
+        "Lunch finalization is not due yet. Scheduled execution is allowed at or after 14:00 IST."
       );
     }
     if (mealType === "DINNER" && !isDinnerFinalizationDue(effectiveDate)) {
       throw ApiError.badRequest(
-        "Dinner finalization is not due yet. Scheduled execution is allowed at or after 23:00 IST."
+        "Dinner finalization is not due yet. Scheduled execution is allowed at or after 21:00 IST."
       );
     }
   }
