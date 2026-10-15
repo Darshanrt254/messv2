@@ -10,9 +10,11 @@ import {
   isSunday,
   parseDateRange,
   getBusinessDatesList,
+  getLunchPollWindow,
 } from "../utils/businessTime.js";
 import { getPollForCustomer } from "./pollService.js";
 import { getCustomerServiceStatus } from "./customerEligibilityService.js";
+import { generateMealToken } from "./mealTokenService.js";
 
 /**
  * Retrieves today's complete meal and attendance state for the authenticated customer.
@@ -145,6 +147,7 @@ export async function markCustomerAttendance(userId, { mealType, status }, date 
 
   // Determine appropriate location based on meal type and day
   let resolvedLocation = null;
+  const isPollLive = mealType === "LUNCH" && isWeekday(date) && getLunchPollWindow(date).isOpen;
 
   if (mealType === "DINNER") {
     // Dinner has no poll; PRESENT is always RESTAURANT, ABSENT is null
@@ -154,11 +157,13 @@ export async function markCustomerAttendance(userId, { mealType, status }, date 
       resolvedLocation = null;
     } else {
       // status === "PRESENT"
-      if (isSaturday(date) || isSunday(date)) {
-        // Weekend lunch has no poll; PRESENT is RESTAURANT
+      if (!isPollLive) {
+        // Poll is not live (weekend, before 06:00, or after 11:30 IST):
+        // Default location RESTAURANT is selected for token generation
         resolvedLocation = "RESTAURANT";
       } else {
-        // Weekday lunch: location remains null until customer votes in poll,
+        // Weekday lunch while poll is live:
+        // Location remains null until customer votes in poll,
         // unless customer already voted in today's poll prior to this call
         const poll = await prisma.poll.findUnique({
           where: {
@@ -195,6 +200,9 @@ export async function markCustomerAttendance(userId, { mealType, status }, date 
         mealType,
       },
     },
+    include: {
+      mealToken: true,
+    },
   });
 
   // Immutability enforcement for customers
@@ -205,7 +213,21 @@ export async function markCustomerAttendance(userId, { mealType, status }, date 
       );
     }
     // Repeated request with same status: idempotent return
-    return existingAttendance;
+    let existingToken = existingAttendance.mealToken || null;
+    if (status === "PRESENT" && existingAttendance.location && !existingToken) {
+      try {
+        const tokenRes = await generateMealToken(existingAttendance.id);
+        existingToken = tokenRes.mealToken || tokenRes;
+      } catch (err) {
+        if (err instanceof ApiError) throw err;
+        console.warn("Auto-token generation error on idempotent attendance:", err.message);
+      }
+    }
+    return {
+      ...existingAttendance,
+      mealToken: existingToken,
+      requiresPollVote: isPollLive && !existingAttendance.location,
+    };
   }
 
   const now = date instanceof Date ? date : new Date(date);
@@ -220,6 +242,9 @@ export async function markCustomerAttendance(userId, { mealType, status }, date 
         source: "CUSTOMER",
         markedAt: now,
       },
+      include: {
+        mealToken: true,
+      },
     });
   } else {
     attendance = await prisma.attendance.create({
@@ -232,10 +257,32 @@ export async function markCustomerAttendance(userId, { mealType, status }, date 
         source: "CUSTOMER",
         markedAt: now,
       },
+      include: {
+        mealToken: true,
+      },
     });
   }
 
-  return attendance;
+  // Automatic token generation:
+  // If marked PRESENT and has resolvedLocation (e.g. Dinner, or Lunch when poll not live, or Lunch when already voted)
+  let mealToken = attendance.mealToken || null;
+  if (status === "PRESENT" && resolvedLocation && !mealToken) {
+    try {
+      const tokenRes = await generateMealToken(attendance.id);
+      mealToken = tokenRes.mealToken || tokenRes;
+    } catch (err) {
+      if (err instanceof ApiError) {
+        throw err;
+      }
+      console.warn("Auto-token generation error:", err.message);
+    }
+  }
+
+  return {
+    ...attendance,
+    mealToken,
+    requiresPollVote: isPollLive && !resolvedLocation,
+  };
 }
 
 /**

@@ -388,7 +388,7 @@ describe("Phase 6: Owner Cash Recharge & Integration Workflow Tests", () => {
       .post(`/api/owner/meal-tokens/${attRecord.id}`)
       .set("Cookie", ownerCookie);
 
-    assert.equal(tokenRes.status, 201);
+    assert.ok([200, 201].includes(tokenRes.status));
     assert.equal(tokenRes.body.mealToken.token, "01-10-LU-R-001");
 
     // Balance is now 0

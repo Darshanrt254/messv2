@@ -33,14 +33,16 @@ export async function getAttendanceHistory(req, res, next) {
 export async function markAttendance(req, res, next) {
   try {
     const { mealType, status } = req.body || {};
-    const attendance = await attendanceService.markCustomerAttendance(req.user.id, {
+    const result = await attendanceService.markCustomerAttendance(req.user.id, {
       mealType,
       status,
     });
 
     return res.status(200).json({
       message: "Attendance confirmed successfully",
-      attendance,
+      attendance: result,
+      mealToken: result.mealToken || null,
+      requiresPollVote: Boolean(result.requiresPollVote),
     });
   } catch (error) {
     next(error);

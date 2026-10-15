@@ -9,6 +9,7 @@ import {
   isSunday,
 } from "../utils/businessTime.js";
 import { getCustomerServiceStatus } from "./customerEligibilityService.js";
+import { generateMealToken } from "./mealTokenService.js";
 
 /**
  * Deterministically retrieves or creates today's Lunch Poll for Monday-Friday.
@@ -277,6 +278,17 @@ export async function voteInPoll({ customerId, location, date = getNow() }) {
       },
     };
   });
+
+  // Automatically generate meal token for the lunch attendance
+  try {
+    const tokenResult = await generateMealToken(result.attendance.id);
+    result.mealToken = tokenResult.mealToken || tokenResult;
+  } catch (err) {
+    if (err instanceof ApiError) {
+      throw err;
+    }
+    console.warn("Auto-token generation after poll vote error:", err.message);
+  }
 
   return result;
 }
